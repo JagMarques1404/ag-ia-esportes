@@ -11,17 +11,31 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Buscar picks do dia atual
-    const today = new Date().toISOString().split('T')[0];
+    console.log('🔍 Buscando picks no banco...');
     
+    // Buscar TODOS os picks (sem filtro de data)
     const { data, error } = await supabase
       .from('recommendations')
       .select('*')
-      .eq('status', 'active')
-      .order('edge_percentage', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(10);
 
-    if (error || !data || data.length === 0) {
+    console.log('📊 Resultado da query:', { 
+      error: error?.message, 
+      count: data?.length || 0,
+      firstPick: data?.[0] ? {
+        team_home: data[0].team_home,
+        team_away: data[0].team_away,
+        edge: data[0].edge_percentage
+      } : null
+    });
+
+    if (error) {
+      console.error('❌ Erro na query:', error);
+    }
+
+    if (!data || data.length === 0) {
+      console.log('⚠️ Nenhum dado encontrado, retornando demo');
       // Retornar dados demo se não houver dados reais
       return res.status(200).json({
         success: true,
@@ -44,6 +58,8 @@ export default async function handler(req, res) {
       });
     }
 
+    console.log('✅ Transformando dados reais...');
+    
     // Transformar dados reais
     const formattedPicks = data.map(pick => ({
       id: pick.fixture_id,
@@ -56,9 +72,11 @@ export default async function handler(req, res) {
       probability: `${Math.round(pick.predicted_probability * 100)}%`,
       fairOdd: pick.fair_odd,
       marketOdd: pick.best_market_odd,
-      edge: `+${pick.edge_percentage}%`,
+      edge: `+${pick.edge_percentage.toFixed(1)}%`,
       confidence: pick.edge_percentage > 20 ? 'Forte' : pick.edge_percentage > 10 ? 'Moderada' : 'Fraca'
     }));
+
+    console.log('🎯 Retornando picks formatados:', formattedPicks.length);
 
     return res.status(200).json({
       success: true,
@@ -66,7 +84,11 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    console.error('Erro:', error);
-    return res.status(500).json({ error: 'Erro interno' });
+    console.error('❌ Erro geral:', error);
+    return res.status(500).json({ 
+      success: false,
+      error: 'Erro interno',
+      details: error.message 
+    });
   }
 }
