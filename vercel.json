@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "api/daily-process.js": {
+      "maxDuration": 300
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/daily-process",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}
