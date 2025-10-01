@@ -10,6 +10,11 @@ export function useTopPicks() {
       setLoading(true);
       
       const response = await fetch('/api/picks');
+      
+      if (!response.ok) {
+        throw new Error('Erro na resposta da API');
+      }
+      
       const data = await response.json();
       
       if (data.success && data.picks) {
@@ -22,11 +27,30 @@ export function useTopPicks() {
         setPicks(picksWithAnalysis);
         setError(null);
       } else {
-        setError('Erro ao carregar picks');
+        throw new Error('Formato de dados inválido');
       }
     } catch (err) {
       console.error('Erro ao carregar picks:', err);
-      setError('Erro ao carregar dados');
+      
+      // Fallback para dados demo
+      setPicks([
+        {
+          id: 'demo1',
+          homeTeam: 'Manchester City',
+          awayTeam: 'Arsenal',
+          date: new Date().toLocaleDateString('pt-BR'),
+          time: '16:30',
+          league: 'Premier League',
+          market: 'Mais de 2.5 gols',
+          probability: '62%',
+          fairOdd: 1.60,
+          marketOdd: 1.75,
+          edge: '+9.4%',
+          confidence: 'Forte',
+          analysis: 'Modelo prevê 62% de chance. Mais de 2.5 gols. Odd justa 1.60, mercado oferece 1.75. Edge de +9.4%.'
+        }
+      ]);
+      setError('Usando dados de demonstração');
     } finally {
       setLoading(false);
     }
