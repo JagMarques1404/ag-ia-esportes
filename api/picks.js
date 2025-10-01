@@ -17,8 +17,8 @@ export default async function handler(req, res) {
     const { data, error } = await supabase
       .from('recommendations')
       .select('*')
-      .gte('match_date', today)
-      .order('edge', { ascending: false })
+      .eq('status', 'active')
+      .order('edge_percentage', { ascending: false })
       .limit(10);
 
     if (error || !data || data.length === 0) {
@@ -47,20 +47,17 @@ export default async function handler(req, res) {
     // Transformar dados reais
     const formattedPicks = data.map(pick => ({
       id: pick.fixture_id,
-      homeTeam: pick.home_team,
-      awayTeam: pick.away_team,
-      date: new Date(pick.match_date).toLocaleDateString('pt-BR'),
-      time: new Date(pick.match_date).toLocaleTimeString('pt-BR', { 
-        hour: '2-digit', 
-        minute: '2-digit' 
-      }),
+      homeTeam: pick.team_home,
+      awayTeam: pick.team_away,
+      date: new Date().toLocaleDateString('pt-BR'),
+      time: '15:00',
       league: 'Liga Internacional',
-      market: pick.market,
-      probability: `${pick.probability}%`,
+      market: `Mais de ${pick.market_value} gols`,
+      probability: `${Math.round(pick.predicted_probability * 100)}%`,
       fairOdd: pick.fair_odd,
-      marketOdd: pick.market_odd,
-      edge: `+${pick.edge}%`,
-      confidence: pick.confidence
+      marketOdd: pick.best_market_odd,
+      edge: `+${pick.edge_percentage}%`,
+      confidence: pick.edge_percentage > 20 ? 'Forte' : pick.edge_percentage > 10 ? 'Moderada' : 'Fraca'
     }));
 
     return res.status(200).json({
