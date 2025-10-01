@@ -110,7 +110,8 @@ export default async function handler(req, res) {
               fair_odd: Math.round(fairOdd * 100) / 100,
               market_odd: Math.round(odds.over25 * 100) / 100,
               edge: Math.round(edge * 100) / 100,
-              confidence: edge > 8 ? 'Forte' : edge > 5 ? 'Moderada' : 'Fraca'
+              confidence: edge > 8 ? 'Forte' : edge > 5 ? 'Moderada' : 'Fraca',
+              created_at: new Date().toISOString()
             });
           }
         }
@@ -121,14 +122,17 @@ export default async function handler(req, res) {
     
     // Salvar picks no Supabase
     if (picks.length > 0) {
-      const { error } = await supabase
+      console.log('💾 Tentando salvar picks no banco:', picks.length);
+      
+      const { data, error } = await supabase
         .from('recommendations')
-        .insert(picks);
+        .insert(picks)
+        .select();
         
       if (error) {
-        console.error('Erro ao salvar picks:', error);
+        console.error('❌ Erro ao salvar picks:', error.message, error.details);
       } else {
-        console.log(`✅ ${picks.length} picks salvos no banco`);
+        console.log('✅ Picks salvos com sucesso:', data?.length || 0);
       }
     }
     
