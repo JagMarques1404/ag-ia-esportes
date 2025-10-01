@@ -100,21 +100,21 @@ export default async function handler(req, res) {
           const edge = ((odds.over25 - fairOdd) / fairOdd) * 100;
           
           if (edge > 3) { // Só picks com edge > 3%
-picks.push({
-  fixture_id: fixture.fixture.id,
-  team_home: fixture.teams.home.name,
-  team_away: fixture.teams.away.name,
-  market_type: 'totals',
-  market_value: '2.5',
-  selection: 'over',
-  predicted_probability: probabilities.over25,
-  fair_odd: Math.round(fairOdd * 100) / 100,
-  best_market_odd: Math.round(odds.over25 * 100) / 100,
-  edge_percentage: Math.round(edge * 100) / 100,
-  confidence_score: edge,
-  model_version: 'poisson_v1',
-  status: 'active'
-});
+            picks.push({
+              fixture_id: fixture.fixture.id,
+              team_home: fixture.teams.home.name,
+              team_away: fixture.teams.away.name,
+              market_type: 'totals',
+              market_value: '2.5',
+              selection: 'over',
+              predicted_probability: probabilities.over25,
+              fair_odd: Math.round(fairOdd * 100) / 100,
+              best_market_odd: Math.round(odds.over25 * 100) / 100,
+              edge_percentage: Math.round(edge * 100) / 100,
+              confidence_score: edge,
+              model_version: 'poisson_v1',
+              status: 'active'
+            });
           }
         }
       } catch (error) {
