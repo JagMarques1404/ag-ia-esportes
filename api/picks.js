@@ -1,5 +1,5 @@
-// api/picks.js — VERSÃO ANTI-500 com dynamic import
-export default async function handler(req, res) {
+// api/picks.js — CommonJS + dynamic import (máxima compatibilidade)
+module.exports = async (req, res) => {
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -17,7 +17,7 @@ export default async function handler(req, res) {
     }))
   }
 
-  // Dynamic import evita erro "Cannot use import statement outside a module"
+  // Dynamic import evita erro ESM/CJS
   let createClient
   try {
     ({ createClient } = await import('@supabase/supabase-js'))
@@ -56,7 +56,7 @@ export default async function handler(req, res) {
       .eq('publication_date', todayBR)
       .order('created_at', { ascending: false })
       .limit(1)
-      .maybeSingle() // não erro se não houver linha
+      .maybeSingle()
 
     if (pub.data?.content?.length) {
       return res.status(200).end(JSON.stringify({
