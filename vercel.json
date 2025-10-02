@@ -1,13 +1,13 @@
 {
   "functions": {
-    "api/daily-process.js": {
-      "maxDuration": 300
+    "api/**/*.js": {
+      "runtime": "nodejs20.x"
     }
   },
-  "crons": [
+  "rewrites": [
     {
-      "path": "/api/daily-process",
-      "schedule": "0 3 * * *"
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
     }
   ]
 }
