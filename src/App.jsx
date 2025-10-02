@@ -8,6 +8,30 @@ import { useTopPicks } from './hooks/useTopPicks'
 import './App.css'
 
 function App() {
+  // estado para lista e loading
+const [picks, setPicks] = React.useState([]);
+const [loading, setLoading] = React.useState(true);
+
+// carrega da API /api/picks
+React.useEffect(() => {
+  (async () => {
+    try {
+      const r = await fetch('/api/picks', { cache: 'no-store' });
+      const j = await r.json();
+      const list = Array.isArray(j?.data)
+        ? j.data
+        : Array.isArray(j?.picks)
+        ? j.picks
+        : [];
+      setPicks(list);
+    } catch (e) {
+      console.error('Erro ao buscar picks', e);
+      setPicks([]);
+    } finally {
+      setLoading(false);
+    }
+  })();
+}, []);
   const { picks, loading, error } = useTopPicks();
 
   return (
