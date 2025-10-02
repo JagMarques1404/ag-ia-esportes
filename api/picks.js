@@ -1,45 +1,70 @@
 import { createClient } from '@supabase/supabase-js'
 
-// ✅ USAR AS VARIÁVEIS CORRETAS
-const supabaseUrl = process.env.VITE_SUPABASE_URL
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY
+// ✅ Usar variáveis SEM prefixo VITE_ (para servidor)
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 
 let supabase = null
 
 // Inicializar Supabase apenas se as variáveis estiverem disponíveis
-if (supabaseUrl && supabaseAnonKey) {
-  supabase = createClient(supabaseUrl, supabaseAnonKey)
+if (supabaseUrl && supabaseKey) {
+  try {
+    supabase = createClient(supabaseUrl, supabaseKey)
+  } catch (err) {
+    console.error('❌ Erro ao inicializar Supabase:', err)
+  }
 }
 
 /**
- * Buscar publicação do dia por tipo
+ * Buscar dados do Supabase (com fallback para diferentes estruturas)
  */
-async function getTodayPublication(type) {
+async function fetchPicksFromSupabase() {
   if (!supabase) {
-    return null
+    throw new Error('Supabase não inicializado - verifique variáveis de ambiente')
   }
 
   try {
+    // Tentar buscar da tabela daily_publications primeiro
     const today = new Date().toISOString().split('T')[0]
     
-    const { data, error } = await supabase
+    const { data: publication, error: pubError } = await supabase
       .from('daily_publications')
       .select('*')
-      .eq('publication_type', type)
+      .eq('publication_type', 'top_picks')
       .eq('publication_date', today)
       .order('created_at', { ascending: false })
       .limit(1)
       .single()
 
-    if (error && error.code !== 'PGRST116') {
-      console.error('Erro ao buscar publicação:', error)
-      return null
+    if (!pubError && publication && publication.content) {
+      return {
+        data: publication.content,
+        source: 'daily_publications',
+        lastUpdated: publication.created_at
+      }
     }
 
-    return data
-  } catch (err) {
-    console.error('Erro na consulta Supabase:', err)
+    // Fallback: tentar buscar da tabela recommendations
+    const { data: recommendations, error: recError } = await supabase
+      .from('recommendations')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    if (!recError && recommendations && recommendations.length > 0) {
+      return {
+        data: recommendations,
+        source: 'recommendations',
+        lastUpdated: new Date().toISOString()
+      }
+    }
+
+    // Se chegou aqui, não há dados
     return null
+
+  } catch (err) {
+    console.error('❌ Erro ao buscar dados do Supabase:', err)
+    throw err
   }
 }
 
@@ -156,60 +181,88 @@ function getMockPicks() {
 }
 
 /**
- * Serverless Function Handler
+ * Serverless Function Handler - SEMPRE retorna JSON
  */
 export default async function handler(req, res) {
-  // Configurar CORS
+  // ✅ SEMPRE configurar headers JSON primeiro
+  res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
   // Handle preflight
   if (req.method === 'OPTIONS') {
-    return res.status(200).end()
+    return res.status(200).json({ success: true })
   }
 
   // Permitir apenas GET
   if (req.method !== 'GET') {
     return res.status(405).json({ 
       success: false, 
-      error: 'Método não permitido' 
+      error: 'Método não permitido',
+      data: []
     })
   }
 
   try {
-    console.log('🔄 Processando requisição /api/picks')
+    console.log('🔄 [api/picks] Iniciando processamento...')
+    console.log('🔧 [api/picks] Variáveis disponíveis:', {
+      SUPABASE_URL: !!process.env.SUPABASE_URL,
+      VITE_SUPABASE_URL: !!process.env.VITE_SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      SUPABASE_ANON_KEY: !!process.env.SUPABASE_ANON_KEY,
+      VITE_SUPABASE_ANON_KEY: !!process.env.VITE_SUPABASE_ANON_KEY
+    })
 
     // Tentar buscar dados reais do Supabase
-    const publication = await getTodayPublication('top_picks')
-    
-    if (publication && publication.content) {
-      console.log('✅ Dados encontrados no Supabase')
+    let result = null
+    let error = null
+
+    try {
+      result = await fetchPicksFromSupabase()
+      console.log('✅ [api/picks] Dados do Supabase:', result ? `${result.data.length} items de ${result.source}` : 'nenhum')
+    } catch (supabaseError) {
+      console.error('❌ [api/picks] Erro do Supabase:', supabaseError.message)
+      error = supabaseError.message
+    }
+
+    if (result && result.data && result.data.length > 0) {
+      // Sucesso - dados reais
       return res.status(200).json({
         success: true,
-        data: publication.content,  // ✅ USAR 'data' (não 'picks')
-        lastUpdated: publication.created_at,
-        source: 'database'
+        data: result.data,
+        lastUpdated: result.lastUpdated,
+        source: result.source,
+        count: result.data.length
       })
     } else {
-      console.log('⚠️ Nenhum dado no Supabase, usando mock')
+      // Fallback - dados mock
+      console.log('⚠️ [api/picks] Usando dados mock como fallback')
+      const mockData = getMockPicks()
+      
       return res.status(200).json({
         success: true,
-        data: getMockPicks(),  // ✅ USAR 'data' (não 'picks')
+        data: mockData,
         lastUpdated: new Date().toISOString(),
-        source: 'mock'
+        source: 'mock',
+        count: mockData.length,
+        warning: error || 'Nenhum dado encontrado no banco'
       })
     }
-  } catch (error) {
-    console.error('❌ Erro na API:', error)
+
+  } catch (criticalError) {
+    // ✅ SEMPRE retornar JSON, mesmo em erro crítico
+    console.error('💥 [api/picks] Erro crítico:', criticalError)
     
-    // Sempre retornar dados mock em caso de erro
+    const mockData = getMockPicks()
+    
     return res.status(200).json({
-      success: true,
-      data: getMockPicks(),  // ✅ USAR 'data' (não 'picks')
+      success: false,
+      data: mockData,
       lastUpdated: new Date().toISOString(),
-      source: 'mock',
-      error: 'Erro interno do servidor'
+      source: 'mock_fallback',
+      count: mockData.length,
+      error: criticalError.message || 'Erro interno do servidor'
     })
   }
 }
