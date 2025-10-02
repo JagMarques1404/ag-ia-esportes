@@ -1,7 +1,7 @@
-// api/picks.js - Handler robusto que SEMPRE retorna JSON
+// api/picks.js - Handler final que SEMPRE retorna JSON
 import { createClient } from '@supabase/supabase-js'
 
-// ✅ Usar variáveis SEM prefixo VITE_ (para servidor)
+// Usar variáveis SEM prefixo VITE_ (para servidor)
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 
@@ -17,7 +17,18 @@ if (supabaseUrl && supabaseKey) {
 }
 
 /**
- * Buscar dados do Supabase (com fallback para diferentes estruturas)
+ * Obter data de hoje no timezone brasileiro
+ */
+function getTodayBrazil() {
+  const nowSP = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }))
+  const yyyy = nowSP.getFullYear()
+  const mm = String(nowSP.getMonth() + 1).padStart(2, '0')
+  const dd = String(nowSP.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+/**
+ * Buscar dados do Supabase
  */
 async function fetchPicksFromSupabase() {
   if (!supabase) {
@@ -26,13 +37,13 @@ async function fetchPicksFromSupabase() {
 
   try {
     // Tentar buscar da tabela daily_publications primeiro
-    const today = new Date().toISOString().split('T')[0]
+    const todayBR = getTodayBrazil()
     
     const { data: publication, error: pubError } = await supabase
       .from('daily_publications')
       .select('*')
       .eq('publication_type', 'top_picks')
-      .eq('publication_date', today)
+      .eq('publication_date', todayBR)
       .order('created_at', { ascending: false })
       .limit(1)
       .single()
@@ -185,7 +196,7 @@ function getMockPicks() {
  * Serverless Function Handler - SEMPRE retorna JSON
  */
 export default async function handler(req, res) {
-  // ✅ SEMPRE configurar headers JSON primeiro
+  // SEMPRE configurar headers JSON primeiro
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -252,7 +263,7 @@ export default async function handler(req, res) {
     }
 
   } catch (criticalError) {
-    // ✅ SEMPRE retornar JSON, mesmo em erro crítico
+    // SEMPRE retornar JSON, mesmo em erro crítico
     console.error('💥 [api/picks] Erro crítico:', criticalError)
     
     const mockData = getMockPicks()
