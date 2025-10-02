@@ -1,3 +1,4 @@
+// api/picks.js - Handler robusto que SEMPRE retorna JSON
 import { createClient } from '@supabase/supabase-js'
 
 // ✅ Usar variáveis SEM prefixo VITE_ (para servidor)
