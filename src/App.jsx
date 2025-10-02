@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import { getPicks } from './lib/getPicks'; // ajuste o caminho se estiver em /pages (../lib/getPicks)
 import { useState } from 'react'
 import { Header } from './components/Header'
 import { ValuePick } from './components/ValuePick'
