@@ -521,6 +521,37 @@ export interface SyncFixturePlayerStatsResult {
   syncRunId: string;
   api_fixture_id: number;
   total_player_stats: number;
+  duplicate_players_dropped: number;
+  duplicate_stats_dropped: number;
+}
+
+/**
+ * Dedupe genérico mantendo o item de maior score por chave.
+ * Sem scoreFn, mantém o último item visto para a chave.
+ * Retorna [únicos, descartados].
+ */
+function dedupeByKey<T>(
+  items: readonly T[],
+  keyFn: (item: T) => string,
+  scoreFn?: (item: T) => number
+): [T[], number] {
+  const best = new Map<string, T>();
+  let dropped = 0;
+  for (const item of items) {
+    const key = keyFn(item);
+    const prev = best.get(key);
+    if (prev === undefined) {
+      best.set(key, item);
+      continue;
+    }
+    dropped++;
+    if (scoreFn) {
+      best.set(key, scoreFn(item) > scoreFn(prev) ? item : prev);
+    } else {
+      best.set(key, item);
+    }
+  }
+  return [Array.from(best.values()), dropped];
 }
 
 export async function syncFixturePlayerStats(
@@ -628,15 +659,27 @@ export async function syncFixturePlayerStats(
       }
     }
 
-    if (playerBasics.length > 0) {
+    // ANTI-DUPLICATE no upsert de football_players (UNIQUE em
+    // api_player_id). API-Football pode entregar o mesmo jogador 2x
+    // (substituto que aparece em duas listas). Sem dedupe, Postgres
+    // joga "ON CONFLICT DO UPDATE command cannot affect row a second
+    // time".
+    const [dedupedPlayerBasics, duplicatePlayersDropped] = dedupeByKey(
+      playerBasics,
+      (p) => String(p.api_player_id),
+      // Em colisão, prefere o que tem current_team_id resolvido.
+      (p) => (p.current_team_id ? 1 : 0)
+    );
+
+    if (dedupedPlayerBasics.length > 0) {
       const { error: pErr } = await supabase
         .from("football_players")
-        .upsert(playerBasics, { onConflict: "api_player_id" });
+        .upsert(dedupedPlayerBasics, { onConflict: "api_player_id" });
       if (pErr)
         throw new Error(`Erro ao upsert players: ${pErr.message}`);
 
       // Resolver player_id local para preencher rows
-      const apiIds = Array.from(new Set(playerBasics.map((p) => p.api_player_id)));
+      const apiIds = dedupedPlayerBasics.map((p) => p.api_player_id);
       const { data: locals } = await supabase
         .from("football_players")
         .select("id, api_player_id")
@@ -651,10 +694,43 @@ export async function syncFixturePlayerStats(
       }
     }
 
-    if (rows.length > 0) {
+    // ANTI-DUPLICATE em football_player_match_stats. A tabela não tem
+    // UNIQUE composto, mas inserir o mesmo (fixture, player) duas
+    // vezes polui o histórico e quebra getPlayerLastMatches. Em
+    // colisão, mantém o registro com mais sinal (soma das ações).
+    function statsScore(r: Record<string, unknown>): number {
+      const fields = [
+        "minutes",
+        "shots_total",
+        "shots_on",
+        "fouls_committed",
+        "fouls_drawn",
+        "tackles_total",
+        "interceptions",
+        "passes_total",
+        "passes_key",
+        "duels_total",
+        "duels_won",
+        "yellow_cards",
+        "red_cards",
+      ] as const;
+      let s = 0;
+      for (const f of fields) {
+        const v = r[f];
+        if (typeof v === "number" && Number.isFinite(v)) s += v;
+      }
+      return s;
+    }
+    const [dedupedRows, duplicateStatsDropped] = dedupeByKey(
+      rows,
+      (r) => `${r.fixture_id as string}|${r.api_player_id as number}`,
+      statsScore
+    );
+
+    if (dedupedRows.length > 0) {
       const { error: insErr } = await supabase
         .from("football_player_match_stats")
-        .insert(rows);
+        .insert(dedupedRows);
       if (insErr)
         throw new Error(`Erro ao salvar player stats: ${insErr.message}`);
     }
@@ -662,15 +738,19 @@ export async function syncFixturePlayerStats(
     const result: SyncFixturePlayerStatsResult = {
       syncRunId,
       api_fixture_id: apiFixtureId,
-      total_player_stats: rows.length,
+      total_player_stats: dedupedRows.length,
+      duplicate_players_dropped: duplicatePlayersDropped,
+      duplicate_stats_dropped: duplicateStatsDropped,
     };
 
     await finishSyncRun(syncRunId, {
       status: "success",
-      records_created: rows.length,
+      records_created: result.total_player_stats,
       metadata: {
         api_fixture_id: apiFixtureId,
         total_player_stats: result.total_player_stats,
+        duplicate_players_dropped: result.duplicate_players_dropped,
+        duplicate_stats_dropped: result.duplicate_stats_dropped,
       },
     });
 
