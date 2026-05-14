@@ -314,3 +314,55 @@ export interface FootballSyncRun {
   error_message: string | null;
   metadata_json: unknown;
 }
+
+// ============================================================
+// API cache + telemetria (migration 005)
+// Espelha as tabelas api_cache / api_request_logs e as views
+// vw_api_usage_today / vw_api_cache_status.
+// ============================================================
+
+export interface ApiCacheEntry {
+  id: string;
+  provider: string;
+  endpoint: string;
+  params_hash: string;
+  params_json: unknown;
+  response_json: unknown;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiRequestLog {
+  id: string;
+  provider: string;
+  endpoint: string;
+  params_hash: string | null;
+  params_json: unknown;
+  status: string;
+  status_code: number | null;
+  latency_ms: number | null;
+  cached: boolean;
+  request_date: string;
+  created_at: string;
+  error_message: string | null;
+}
+
+export interface ApiUsageToday {
+  provider: string;
+  request_date: string;
+  total_requests: number;
+  cached_requests: number;
+  real_requests: number;
+  success_count: number;
+  error_count: number;
+}
+
+export interface ApiCacheStatus {
+  provider: string;
+  endpoint: string;
+  total_entries: number;
+  expired_entries: number;
+  valid_entries: number;
+  last_cached_at: string | null;
+}
