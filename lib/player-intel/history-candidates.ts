@@ -2,6 +2,38 @@ import "@/lib/server-only-guard";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 /**
+ * Tamanho máximo de página do PostgREST do Supabase.
+ * Sem paginar, qualquer SELECT acima disso é silenciosamente truncado
+ * — o cliente JS não avisa. Usar fetchAllPaginated para varreduras
+ * que precisam ler tabelas inteiras.
+ */
+const PG_DEFAULT_PAGE_SIZE = 1000;
+
+/**
+ * Itera .range(start, end) até a página vir vazia ou menor que o
+ * pageSize. Retorna a união de todas as páginas.
+ */
+async function fetchAllPaginated<T>(
+  build: (from: number, to: number) => Promise<{ data: T[] | null; error: { message: string } | null }>,
+  pageSize: number = PG_DEFAULT_PAGE_SIZE
+): Promise<T[]> {
+  const all: T[] = [];
+  let from = 0;
+  // Hard cap defensivo (50k = 50 páginas) para evitar loop infinito
+  // se algum filtro retornar dataset gigante por engano.
+  for (let page = 0; page < 50; page++) {
+    const to = from + pageSize - 1;
+    const { data, error } = await build(from, to);
+    if (error) throw new Error(`fetchAllPaginated: ${error.message}`);
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
+/**
  * Ligas priorizadas para acumular histórico individual.
  * Cobertura comprovada de /fixtures/players nessas competições.
  * Pode ser sobrescrita via options.leagueNames.
@@ -100,19 +132,16 @@ export async function getFinishedFixturesMissingPlayerStats(
   const upperDate = options.date ?? today;
 
   // 1. Conjunto de fixture_ids que já têm stats individuais.
-  // Buscamos só o id distinto. Volume cresce com tempo — paginação
-  // só vira problema quando isso passar de ~50k linhas.
-  const { data: covered, error: covErr } = await supabase
-    .from("football_player_match_stats")
-    .select("fixture_id");
-  if (covErr) {
-    throw new Error(
-      `getFinishedFixturesMissingPlayerStats (covered): ${covErr.message}`
-    );
-  }
-  const coveredSet = new Set(
-    (covered ?? []).map((r) => r.fixture_id as string)
+  // Paginar — sem isso o PostgREST devolve só 1000 linhas e fixtures
+  // já cobertos passariam a ser propostos de novo.
+  const covered = await fetchAllPaginated<{ fixture_id: string }>(
+    async (from, to) =>
+      await supabase
+        .from("football_player_match_stats")
+        .select("fixture_id")
+        .range(from, to)
   );
+  const coveredSet = new Set(covered.map((r) => r.fixture_id));
 
   // 2. Fixtures FT na janela.
   let query = supabase
@@ -225,17 +254,24 @@ export async function getPlayerHistoryCoverage(): Promise<PlayerHistoryCoverage>
       .or("api_player_id.is.null,api_player_id.lte.0"),
   ]);
 
-  // Sample por jogador. Lê agregado em JS — volume é o suficiente
-  // pro free tier (poucas dezenas de milhares no pior caso).
-  const { data: stats, error: statsErr } = await supabase
-    .from("football_player_match_stats")
-    .select(
-      "api_player_id, player_name, football_fixtures!inner(league_name)"
-    )
-    .gt("api_player_id", 0); // exclui inválidos do agrupamento
-  if (statsErr) {
-    throw new Error(`getPlayerHistoryCoverage (stats): ${statsErr.message}`);
-  }
+  // Sample por jogador. Paginação obrigatória — o PostgREST do Supabase
+  // limita SELECTs a 1000 linhas por padrão. Sem paginar, o bucket
+  // sample_size>=2 nunca aparece quando passamos de 1000 stats.
+  type StatRow = {
+    api_player_id: number | null;
+    player_name: string | null;
+    football_fixtures: { league_name?: string | null } | { league_name?: string | null }[] | null;
+  };
+  const stats = await fetchAllPaginated<StatRow>(
+    async (from, to) =>
+      await supabase
+        .from("football_player_match_stats")
+        .select(
+          "api_player_id, player_name, football_fixtures!inner(league_name)"
+        )
+        .gt("api_player_id", 0)
+        .range(from, to)
+  );
 
   const samplesByPlayer = new Map<
     number,
@@ -243,27 +279,25 @@ export async function getPlayerHistoryCoverage(): Promise<PlayerHistoryCoverage>
   >();
   const matchesByLeague = new Map<string, number>();
 
-  for (const row of stats ?? []) {
-    const apiId = row.api_player_id as number | null;
+  for (const row of stats) {
+    const apiId = row.api_player_id;
     if (apiId != null && apiId > 0) {
       const cur = samplesByPlayer.get(apiId) ?? {
-        name: (row.player_name as string | null) ?? null,
+        name: row.player_name ?? null,
         count: 0,
       };
       cur.count++;
-      if (!cur.name) cur.name = (row.player_name as string | null) ?? null;
+      if (!cur.name) cur.name = row.player_name ?? null;
       samplesByPlayer.set(apiId, cur);
     }
     // football_fixtures vem como objeto único (innerJoin) ou array,
     // dependendo do tipo do client. Tratar ambos.
-    const fxRel = (row as Record<string, unknown>).football_fixtures;
+    const fxRel = row.football_fixtures;
     let leagueName: string | null = null;
     if (Array.isArray(fxRel)) {
-      const first = fxRel[0] as { league_name?: string | null } | undefined;
-      leagueName = first?.league_name ?? null;
+      leagueName = fxRel[0]?.league_name ?? null;
     } else if (fxRel && typeof fxRel === "object") {
-      leagueName = ((fxRel as { league_name?: string | null }).league_name ??
-        null) as string | null;
+      leagueName = fxRel.league_name ?? null;
     }
     if (leagueName) {
       matchesByLeague.set(leagueName, (matchesByLeague.get(leagueName) ?? 0) + 1);
