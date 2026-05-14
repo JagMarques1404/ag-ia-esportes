@@ -53,6 +53,12 @@ async function main() {
         `   ${String(l.player_stats_count).padStart(4)}  ${l.league_name}`
       );
     }
+    console.log(
+      "\nObs: a coleta diária deve priorizar ligas já comprovadas (PRIORITY_LEAGUE_NAMES)."
+    );
+    console.log(
+      "Ligas com 0 histórico de stats são candidatas a entrar em LOW_COVERAGE_LEAGUE_NAMES."
+    );
   }
 
   if (c.total_player_stats === 0) {

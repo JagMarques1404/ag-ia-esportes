@@ -28,6 +28,8 @@ interface CliArgs {
   limit: number;
   daysBack: number;
   dryRun: boolean;
+  allowUnknownLeagues: boolean;
+  excludeLowCoverage: boolean;
 }
 
 const QUOTA_FLOOR = 30;
@@ -51,7 +53,13 @@ function parseArgs(): CliArgs {
   // Default dryRun=true. Só corre coleta com --dryRun=false explícito.
   const dryRunRaw = argMap.get("dryRun");
   const dryRun = dryRunRaw === undefined ? true : dryRunRaw !== "false";
-  return { limit, daysBack, dryRun };
+  // Defaults conservadores: só ligas comprovadas e blacklist ativa.
+  const allowUnknownLeagues = argMap.get("allowUnknownLeagues") === "true";
+  const excludeLowCoverage =
+    argMap.get("excludeLowCoverage") === undefined
+      ? true
+      : argMap.get("excludeLowCoverage") !== "false";
+  return { limit, daysBack, dryRun, allowUnknownLeagues, excludeLowCoverage };
 }
 
 function isPlanLimitError(message: string): boolean {
@@ -70,7 +78,7 @@ function pad(n: number, w = 4): string {
 async function main() {
   const args = parseArgs();
   console.log(
-    `→ daily:player-history limit=${args.limit} daysBack=${args.daysBack} dryRun=${args.dryRun}\n`
+    `→ daily:player-history limit=${args.limit} daysBack=${args.daysBack} dryRun=${args.dryRun} allowUnknownLeagues=${args.allowUnknownLeagues} excludeLowCoverage=${args.excludeLowCoverage}\n`
   );
 
   const { getQuotaSummary } = await import("../lib/api-football/quota");
@@ -80,7 +88,26 @@ async function main() {
   const {
     getFinishedFixturesMissingPlayerStats,
     getPlayerHistoryCoverage,
+    PRIORITY_LEAGUE_NAMES,
+    LOW_COVERAGE_LEAGUE_NAMES,
   } = await import("../lib/player-intel/history-candidates");
+
+  const conservative = !args.allowUnknownLeagues;
+  console.log(
+    `→ ligas aceitas: ${
+      conservative
+        ? `[PRIORITY] ${PRIORITY_LEAGUE_NAMES.join(", ")}`
+        : `qualquer liga (allowUnknownLeagues=true)`
+    }`
+  );
+  if (args.excludeLowCoverage) {
+    console.log(
+      `→ ligas excluídas (low-coverage): ${LOW_COVERAGE_LEAGUE_NAMES.join(", ")}`
+    );
+  }
+  console.log(
+    `→ modo: ${conservative ? "CONSERVADOR (default)" : "ABERTO"}\n`
+  );
 
   // 1. Snapshot ANTES
   const before = await getPlayerHistoryCoverage();
@@ -108,6 +135,8 @@ async function main() {
   const candidates = await getFinishedFixturesMissingPlayerStats({
     limit: args.limit,
     daysBack: args.daysBack,
+    allowUnknownLeagues: args.allowUnknownLeagues,
+    excludeLowCoverage: args.excludeLowCoverage,
   });
 
   console.log(`→ Candidatos elegíveis (${candidates.length}):`);

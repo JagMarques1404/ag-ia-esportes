@@ -28,6 +28,8 @@ interface CliArgs {
   date: string | undefined;
   daysBack: number;
   dryRun: boolean;
+  allowUnknownLeagues: boolean;
+  excludeLowCoverage: boolean;
 }
 
 const QUOTA_FLOOR = 20;
@@ -52,7 +54,13 @@ function parseArgs(): CliArgs {
     throw new Error(`--date inválido: ${date}. Use YYYY-MM-DD.`);
   }
   const dryRun = argMap.get("dryRun") === "true";
-  return { limit, date, daysBack, dryRun };
+  // Defaults conservadores: só ligas comprovadas e blacklist ativa.
+  const allowUnknownLeagues = argMap.get("allowUnknownLeagues") === "true";
+  const excludeLowCoverage =
+    argMap.get("excludeLowCoverage") === undefined
+      ? true
+      : argMap.get("excludeLowCoverage") !== "false";
+  return { limit, date, daysBack, dryRun, allowUnknownLeagues, excludeLowCoverage };
 }
 
 function isPlanLimitError(message: string): boolean {
@@ -75,15 +83,34 @@ interface PerFixtureResult {
 async function main() {
   const args = parseArgs();
   console.log(
-    `→ collect-player-history limit=${args.limit} date=${args.date ?? "—"} daysBack=${args.daysBack} dryRun=${args.dryRun}\n`
+    `→ collect-player-history limit=${args.limit} date=${args.date ?? "—"} daysBack=${args.daysBack} dryRun=${args.dryRun} allowUnknownLeagues=${args.allowUnknownLeagues} excludeLowCoverage=${args.excludeLowCoverage}\n`
   );
 
-  const { getFinishedFixturesMissingPlayerStats } = await import(
-    "../lib/player-intel/history-candidates"
-  );
+  const {
+    getFinishedFixturesMissingPlayerStats,
+    PRIORITY_LEAGUE_NAMES,
+    LOW_COVERAGE_LEAGUE_NAMES,
+  } = await import("../lib/player-intel/history-candidates");
   const { getQuotaSummary } = await import("../lib/api-football/quota");
   const { syncFixturePlayerStats } = await import(
     "../lib/api-football/sync"
+  );
+
+  const conservative = !args.allowUnknownLeagues;
+  console.log(
+    `→ ligas aceitas: ${
+      conservative
+        ? `[PRIORITY] ${PRIORITY_LEAGUE_NAMES.join(", ")}`
+        : `qualquer liga (allowUnknownLeagues=true)`
+    }`
+  );
+  if (args.excludeLowCoverage) {
+    console.log(
+      `→ ligas excluídas (low-coverage): ${LOW_COVERAGE_LEAGUE_NAMES.join(", ")}`
+    );
+  }
+  console.log(
+    `→ modo: ${conservative ? "CONSERVADOR (default)" : "ABERTO"}\n`
   );
 
   const before = await getQuotaSummary();
@@ -102,6 +129,8 @@ async function main() {
     limit: args.limit,
     date: args.date,
     daysBack: args.daysBack,
+    allowUnknownLeagues: args.allowUnknownLeagues,
+    excludeLowCoverage: args.excludeLowCoverage,
   });
 
   console.log(`\n→ Candidatos elegíveis (${candidates.length}):`);

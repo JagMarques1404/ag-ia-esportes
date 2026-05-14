@@ -3,15 +3,31 @@ import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 /**
  * Ligas priorizadas para acumular histórico individual.
- * Cobertura de /fixtures/players costuma ser melhor nessas competições.
+ * Cobertura comprovada de /fixtures/players nessas competições.
  * Pode ser sobrescrita via options.leagueNames.
  */
 export const PRIORITY_LEAGUE_NAMES = [
-  "Liga Profesional Argentina",
-  "Copa Do Brasil",
   "Major League Soccer",
-  "Liga MX",
+  "Copa Do Brasil",
   "Primera A",
+  "Liga Profesional Argentina",
+  "Liga MX",
+] as const;
+
+/**
+ * Ligas com cobertura conhecidamente fraca de /fixtures/players —
+ * o provider devolve `response: []` ou IDs de jogador inválidos.
+ * Bloqueadas por padrão para não desperdiçar quota.
+ *
+ * Atualizar conforme novas observações em produção.
+ */
+export const LOW_COVERAGE_LEAGUE_NAMES = [
+  "USL League One",
+  "USL League Two",
+  "USL W League",
+  "MLS Next Pro",
+  "Liga MX U21",
+  "Division di Honor",
 ] as const;
 
 export interface CandidateOptions {
@@ -19,10 +35,24 @@ export interface CandidateOptions {
   date?: string;
   /** Janela retroativa em dias a partir de agora (default 2). */
   daysBack?: number;
-  /** Lista custom de ligas; se omitida, usa PRIORITY_LEAGUE_NAMES. */
+  /**
+   * Override total de ligas. Se passado, ignora PRIORITY/LOW_COVERAGE.
+   * Útil para testes pontuais.
+   */
   leagueNames?: readonly string[];
   /** Máximo de candidatos a retornar (default 5). */
   limit?: number;
+  /**
+   * Se true, aceita ligas fora de PRIORITY_LEAGUE_NAMES. Default false
+   * (modo conservador — só ligas comprovadas).
+   */
+  allowUnknownLeagues?: boolean;
+  /**
+   * Se true (default), aplica blacklist LOW_COVERAGE_LEAGUE_NAMES mesmo
+   * quando allowUnknownLeagues=true. Sem efeito quando o filtro positivo
+   * de PRIORITY já está ativo.
+   */
+  excludeLowCoverage?: boolean;
 }
 
 export interface CandidateFixture {
@@ -59,6 +89,8 @@ export async function getFinishedFixturesMissingPlayerStats(
   const supabase = getSupabaseAdmin();
   const limit = options.limit ?? 5;
   const daysBack = options.daysBack ?? 2;
+  const allowUnknownLeagues = options.allowUnknownLeagues ?? false;
+  const excludeLowCoverage = options.excludeLowCoverage ?? true;
   const priorityLeagues = options.leagueNames ?? PRIORITY_LEAGUE_NAMES;
 
   // Janela de busca: por data específica OU últimos N dias.
@@ -95,7 +127,17 @@ export async function getFinishedFixturesMissingPlayerStats(
     .order("kickoff_at", { ascending: false });
 
   if (options.leagueNames && options.leagueNames.length > 0) {
+    // Override total — usa exatamente as ligas passadas, sem aplicar
+    // PRIORITY nem blacklist.
     query = query.in("league_name", options.leagueNames as string[]);
+  } else if (!allowUnknownLeagues) {
+    // Modo conservador (default): só ligas em PRIORITY_LEAGUE_NAMES.
+    query = query.in("league_name", PRIORITY_LEAGUE_NAMES as readonly string[] as string[]);
+  } else if (excludeLowCoverage) {
+    // allowUnknownLeagues=true + excludeLowCoverage=true: aceita
+    // qualquer liga MENOS as conhecidas como low-coverage.
+    const blacklisted = `(${LOW_COVERAGE_LEAGUE_NAMES.map((n) => `"${n}"`).join(",")})`;
+    query = query.not("league_name", "in", blacklisted);
   }
 
   // Pega um lote bem maior que o limit final, para conseguir
