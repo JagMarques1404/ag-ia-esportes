@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 import { syncTodayFixtures } from "@/lib/api-football/sync";
 import { getQuotaSummary } from "@/lib/api-football/quota";
-import { validateCronSecret } from "@/lib/security/cron";
+import { validateInternalApiAccess } from "@/lib/security/api-access";
 import { okResponse, errorResponse } from "@/lib/api/response";
 
 export const dynamic = "force-dynamic";
@@ -10,9 +10,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ type: string }> }
 ) {
-  const auth = validateCronSecret(request);
-  if (!auth.ok) {
-    return errorResponse(auth.reason ?? "Não autorizado", {}, 401);
+  const access = await validateInternalApiAccess(request);
+  if (!access.ok) {
+    return errorResponse(access.reason, {}, 401);
   }
 
   const { type } = await params;

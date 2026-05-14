@@ -2,13 +2,19 @@ import { type NextRequest } from "next/server";
 import { syncFixtureLineups } from "@/lib/api-football/sync";
 import { getQuotaSummary } from "@/lib/api-football/quota";
 import { okResponse, errorResponse } from "@/lib/api/response";
+import { validateInternalApiAccess } from "@/lib/security/api-access";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ apiFixtureId: string }> }
 ) {
+  const access = await validateInternalApiAccess(request);
+  if (!access.ok) {
+    return errorResponse(access.reason, {}, 401);
+  }
+
   const { apiFixtureId } = await params;
   const id = Number(apiFixtureId);
   if (!Number.isFinite(id) || id <= 0) {
