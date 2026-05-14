@@ -523,6 +523,8 @@ export interface SyncFixturePlayerStatsResult {
   total_player_stats: number;
   duplicate_players_dropped: number;
   duplicate_stats_dropped: number;
+  /** Jogadores ignorados por api_player_id null/<=0 — id inválido do provider. */
+  invalid_players_skipped: number;
 }
 
 /**
@@ -612,6 +614,7 @@ export async function syncFixturePlayerStats(
       current_team_id: string | null;
     }> = [];
     const rows: Array<Record<string, unknown>> = [];
+    let invalidPlayersSkipped = 0;
 
     for (const block of blocks) {
       const { teamId, opponentTeamId } = resolveTeams(block.team.id);
@@ -619,6 +622,20 @@ export async function syncFixturePlayerStats(
         const stat = entry.statistics?.[0];
         if (!stat) continue;
         const apiPlayerId = entry.player.id;
+
+        // Provider ocasionalmente entrega entries sem id real (jogadores
+        // pouco conhecidos da Copa do Brasil, por exemplo). Sem esse filtro,
+        // todos eles seriam agrupados como api_player_id=0 — o que polui
+        // recent_form e cria sample inflado falso.
+        if (
+          apiPlayerId == null ||
+          typeof apiPlayerId !== "number" ||
+          !Number.isFinite(apiPlayerId) ||
+          apiPlayerId <= 0
+        ) {
+          invalidPlayersSkipped++;
+          continue;
+        }
 
         playerBasics.push({
           api_player_id: apiPlayerId,
@@ -741,6 +758,7 @@ export async function syncFixturePlayerStats(
       total_player_stats: dedupedRows.length,
       duplicate_players_dropped: duplicatePlayersDropped,
       duplicate_stats_dropped: duplicateStatsDropped,
+      invalid_players_skipped: invalidPlayersSkipped,
     };
 
     await finishSyncRun(syncRunId, {
@@ -751,6 +769,7 @@ export async function syncFixturePlayerStats(
         total_player_stats: result.total_player_stats,
         duplicate_players_dropped: result.duplicate_players_dropped,
         duplicate_stats_dropped: result.duplicate_stats_dropped,
+        invalid_players_skipped: result.invalid_players_skipped,
       },
     });
 

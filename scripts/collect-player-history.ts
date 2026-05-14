@@ -156,8 +156,12 @@ async function main() {
         r.duplicate_players_dropped > 0 || r.duplicate_stats_dropped > 0
           ? `  duplicates removidos: ${r.duplicate_players_dropped} players / ${r.duplicate_stats_dropped} stats`
           : "";
+      const invalidNote =
+        r.invalid_players_skipped > 0
+          ? `  invalid api_id pulados: ${r.invalid_players_skipped}`
+          : "";
       console.log(
-        `  ${c.api_fixture_id}  ✓ ${r.total_player_stats} player_stats  (${c.league_name ?? "?"})${dupNote}`
+        `  ${c.api_fixture_id}  ✓ ${r.total_player_stats} player_stats  (${c.league_name ?? "?"})${dupNote}${invalidNote}`
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

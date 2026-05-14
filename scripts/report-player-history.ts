@@ -20,11 +20,22 @@ async function main() {
   const c = await getPlayerHistoryCoverage();
 
   console.log("=== Cobertura de histórico individual ===");
-  console.log(`Players (football_players):       ${c.total_players}`);
+  console.log(`Players (football_players):        ${c.total_players}`);
   console.log(`Player stats (player_match_stats): ${c.total_player_stats}`);
-  console.log(`Jogadores com 1 jogo:             ${c.with_one_match}`);
-  console.log(`Jogadores com 2 jogos:            ${c.with_two_matches}`);
-  console.log(`Jogadores com 3+ jogos:           ${c.with_three_or_more}`);
+  console.log(`Jogadores com 1 jogo:              ${c.with_one_match}`);
+  console.log(`Jogadores com 2 jogos:             ${c.with_two_matches}`);
+  console.log(`Jogadores com 3+ jogos:            ${c.with_three_or_more}`);
+
+  if (c.invalid_players_count > 0 || c.invalid_player_stats_count > 0) {
+    console.log("\n⚠ Registros inválidos (api_player_id null ou ≤ 0):");
+    console.log(`   football_players:           ${c.invalid_players_count}`);
+    console.log(
+      `   football_player_match_stats: ${c.invalid_player_stats_count}`
+    );
+    console.log(
+      "\nExistem registros inválidos sem api_player_id real. Eles foram excluídos do cálculo de sample."
+    );
+  }
 
   if (c.top_by_sample.length > 0) {
     console.log("\n→ Top 20 jogadores por sample_size:");

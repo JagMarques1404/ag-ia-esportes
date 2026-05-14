@@ -145,6 +145,10 @@ export async function getFinishedFixturesMissingPlayerStats(
 export interface PlayerHistoryCoverage {
   total_players: number;
   total_player_stats: number;
+  /** Linhas em football_players com api_player_id null ou <= 0. */
+  invalid_players_count: number;
+  /** Linhas em football_player_match_stats com api_player_id null ou <= 0. */
+  invalid_player_stats_count: number;
   with_one_match: number;
   with_two_matches: number;
   with_three_or_more: number;
@@ -159,18 +163,34 @@ export interface PlayerHistoryCoverage {
 export async function getPlayerHistoryCoverage(): Promise<PlayerHistoryCoverage> {
   const supabase = getSupabaseAdmin();
 
-  const [{ count: totalPlayers }, { count: totalStats }] = await Promise.all([
+  const [
+    { count: totalPlayers },
+    { count: totalStats },
+    { count: invalidPlayers },
+    { count: invalidPlayerStats },
+  ] = await Promise.all([
     supabase.from("football_players").select("*", { count: "exact", head: true }),
     supabase
       .from("football_player_match_stats")
       .select("*", { count: "exact", head: true }),
+    supabase
+      .from("football_players")
+      .select("*", { count: "exact", head: true })
+      .or("api_player_id.is.null,api_player_id.lte.0"),
+    supabase
+      .from("football_player_match_stats")
+      .select("*", { count: "exact", head: true })
+      .or("api_player_id.is.null,api_player_id.lte.0"),
   ]);
 
   // Sample por jogador. Lê agregado em JS — volume é o suficiente
   // pro free tier (poucas dezenas de milhares no pior caso).
   const { data: stats, error: statsErr } = await supabase
     .from("football_player_match_stats")
-    .select("api_player_id, player_name, football_fixtures!inner(league_name)");
+    .select(
+      "api_player_id, player_name, football_fixtures!inner(league_name)"
+    )
+    .gt("api_player_id", 0); // exclui inválidos do agrupamento
   if (statsErr) {
     throw new Error(`getPlayerHistoryCoverage (stats): ${statsErr.message}`);
   }
@@ -183,7 +203,7 @@ export async function getPlayerHistoryCoverage(): Promise<PlayerHistoryCoverage>
 
   for (const row of stats ?? []) {
     const apiId = row.api_player_id as number | null;
-    if (apiId != null) {
+    if (apiId != null && apiId > 0) {
       const cur = samplesByPlayer.get(apiId) ?? {
         name: (row.player_name as string | null) ?? null,
         count: 0,
@@ -235,6 +255,8 @@ export async function getPlayerHistoryCoverage(): Promise<PlayerHistoryCoverage>
   return {
     total_players: totalPlayers ?? 0,
     total_player_stats: totalStats ?? 0,
+    invalid_players_count: invalidPlayers ?? 0,
+    invalid_player_stats_count: invalidPlayerStats ?? 0,
     with_one_match: buckets.one,
     with_two_matches: buckets.two,
     with_three_or_more: buckets.threePlus,

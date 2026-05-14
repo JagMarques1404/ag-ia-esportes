@@ -122,6 +122,14 @@ export async function runFixturePlayerIntel(
 
   for (const lp of players) {
     if (!lp.api_player_id || !lp.player_id) continue;
+    // Guard contra placeholder do provider. Sem isso, todos os
+    // "Pedro Esli da Silva" do mundo viram um único cluster api=0.
+    if (lp.api_player_id <= 0) {
+      warnings.push(
+        `Jogador ignorado por api_player_id inválido: ${lp.player_name ?? "?"} (id=${lp.api_player_id})`
+      );
+      continue;
+    }
     let form: PlayerRecentForm;
     try {
       form = await calculatePlayerRecentForm({

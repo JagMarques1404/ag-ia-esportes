@@ -61,6 +61,9 @@ export async function getPlayerLastMatches(
   options: GetPlayerLastMatchesOptions = {}
 ): Promise<PlayerStatRow[]> {
   const { limit = 5, beforeDate, beforeKickoffAt, excludeFixtureId } = options;
+  // Guard: api_player_id 0/negativo é placeholder do provider —
+  // jogadores diferentes seriam agrupados como o mesmo "atleta".
+  if (!Number.isFinite(apiPlayerId) || apiPlayerId <= 0) return [];
   const supabase = getSupabaseAdmin();
 
   // INNER JOIN com football_fixtures para poder filtrar por data/kickoff.
