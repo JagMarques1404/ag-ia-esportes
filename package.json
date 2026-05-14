@@ -11,7 +11,8 @@
     "test:fixtures:today": "tsx scripts/test-fixtures-today.ts",
     "test:features:today": "tsx scripts/test-features-today.ts",
     "backfill:fixtures": "tsx scripts/backfill-fixtures-days.ts",
-    "rebuild:features:today": "tsx scripts/rebuild-features-today.ts"
+    "rebuild:features:today": "tsx scripts/rebuild-features-today.ts",
+    "test:player-intel": "tsx scripts/test-player-intel.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

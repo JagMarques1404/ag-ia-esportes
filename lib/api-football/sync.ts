@@ -471,6 +471,221 @@ export async function syncFixtureTeamStats(
 }
 
 // ============================================================
+// Player stats individuais (Fase 4)
+// ============================================================
+
+interface RawApiFixturePlayersBlock {
+  team: { id: number; name: string };
+  players: Array<{
+    player: { id: number; name: string; photo?: string };
+    statistics: Array<{
+      games?: {
+        minutes?: number | null;
+        number?: number | null;
+        position?: string | null;
+        rating?: string | null;
+        captain?: boolean | null;
+        substitute?: boolean | null;
+      };
+      offsides?: number | null;
+      shots?: { total?: number | null; on?: number | null };
+      goals?: {
+        total?: number | null;
+        conceded?: number | null;
+        assists?: number | null;
+        saves?: number | null;
+      };
+      passes?: {
+        total?: number | null;
+        key?: number | null;
+        accuracy?: number | string | null;
+      };
+      tackles?: {
+        total?: number | null;
+        blocks?: number | null;
+        interceptions?: number | null;
+      };
+      duels?: { total?: number | null; won?: number | null };
+      dribbles?: {
+        attempts?: number | null;
+        success?: number | null;
+        past?: number | null;
+      };
+      fouls?: { drawn?: number | null; committed?: number | null };
+      cards?: { yellow?: number | null; red?: number | null };
+    }>;
+  }>;
+}
+
+export interface SyncFixturePlayerStatsResult {
+  syncRunId: string;
+  api_fixture_id: number;
+  total_player_stats: number;
+}
+
+export async function syncFixturePlayerStats(
+  apiFixtureId: number
+): Promise<SyncFixturePlayerStatsResult> {
+  const supabase = getSupabaseAdmin();
+  const syncRunId = await startSyncRun("fixture-player-stats", {
+    api_fixture_id: apiFixtureId,
+  });
+
+  try {
+    const { data: fixtureRow, error: fxError } = await supabase
+      .from("football_fixtures")
+      .select(
+        "id, home_team_id, away_team_id, api_home_team_id, api_away_team_id"
+      )
+      .eq("api_fixture_id", apiFixtureId)
+      .maybeSingle();
+    if (fxError)
+      throw new Error(`Erro ao buscar fixture local: ${fxError.message}`);
+    if (!fixtureRow)
+      throw new Error(
+        `Fixture local não encontrada para api_fixture_id=${apiFixtureId}.`
+      );
+
+    const fixtureId: string = fixtureRow.id;
+    const homeTeamId: string | null = fixtureRow.home_team_id;
+    const awayTeamId: string | null = fixtureRow.away_team_id;
+    const apiHomeTeamId: number | null = fixtureRow.api_home_team_id;
+    const apiAwayTeamId: number | null = fixtureRow.api_away_team_id;
+
+    function resolveTeams(apiTeamId: number): {
+      teamId: string | null;
+      opponentTeamId: string | null;
+    } {
+      if (apiTeamId === apiHomeTeamId)
+        return { teamId: homeTeamId, opponentTeamId: awayTeamId };
+      if (apiTeamId === apiAwayTeamId)
+        return { teamId: awayTeamId, opponentTeamId: homeTeamId };
+      return { teamId: null, opponentTeamId: null };
+    }
+
+    const body = await apiFootballGet<
+      ApiFootballEnvelope<RawApiFixturePlayersBlock[]>
+    >("/fixtures/players", { fixture: apiFixtureId });
+    const blocks = body.response ?? [];
+
+    // Refresh: apaga registros antigos do fixture.
+    await supabase
+      .from("football_player_match_stats")
+      .delete()
+      .eq("fixture_id", fixtureId);
+
+    // Coletar players para upsert básico.
+    const playerBasics: Array<{
+      api_player_id: number;
+      name: string;
+      current_team_id: string | null;
+    }> = [];
+    const rows: Array<Record<string, unknown>> = [];
+
+    for (const block of blocks) {
+      const { teamId, opponentTeamId } = resolveTeams(block.team.id);
+      for (const entry of block.players ?? []) {
+        const stat = entry.statistics?.[0];
+        if (!stat) continue;
+        const apiPlayerId = entry.player.id;
+
+        playerBasics.push({
+          api_player_id: apiPlayerId,
+          name: entry.player.name,
+          current_team_id: teamId,
+        });
+
+        rows.push({
+          fixture_id: fixtureId,
+          team_id: teamId,
+          opponent_team_id: opponentTeamId,
+          api_player_id: apiPlayerId,
+          player_name: entry.player.name,
+          position: stat.games?.position ?? null,
+          minutes: stat.games?.minutes ?? 0,
+          rating:
+            stat.games?.rating != null
+              ? Number(stat.games.rating)
+              : null,
+          shots_total: stat.shots?.total ?? 0,
+          shots_on: stat.shots?.on ?? 0,
+          goals: stat.goals?.total ?? 0,
+          assists: stat.goals?.assists ?? 0,
+          passes_total: stat.passes?.total ?? 0,
+          passes_key: stat.passes?.key ?? 0,
+          tackles_total: stat.tackles?.total ?? 0,
+          interceptions: stat.tackles?.interceptions ?? 0,
+          duels_total: stat.duels?.total ?? 0,
+          duels_won: stat.duels?.won ?? 0,
+          dribbles_attempts: stat.dribbles?.attempts ?? 0,
+          dribbles_success: stat.dribbles?.success ?? 0,
+          fouls_drawn: stat.fouls?.drawn ?? 0,
+          fouls_committed: stat.fouls?.committed ?? 0,
+          yellow_cards: stat.cards?.yellow ?? 0,
+          red_cards: stat.cards?.red ?? 0,
+          raw_json: entry,
+        });
+      }
+    }
+
+    if (playerBasics.length > 0) {
+      const { error: pErr } = await supabase
+        .from("football_players")
+        .upsert(playerBasics, { onConflict: "api_player_id" });
+      if (pErr)
+        throw new Error(`Erro ao upsert players: ${pErr.message}`);
+
+      // Resolver player_id local para preencher rows
+      const apiIds = Array.from(new Set(playerBasics.map((p) => p.api_player_id)));
+      const { data: locals } = await supabase
+        .from("football_players")
+        .select("id, api_player_id")
+        .in("api_player_id", apiIds);
+      const playerIdByApi = new Map<number, string>();
+      for (const lp of locals ?? []) {
+        if (lp.api_player_id != null) playerIdByApi.set(lp.api_player_id, lp.id);
+      }
+      for (const r of rows) {
+        const api = r.api_player_id as number;
+        r.player_id = playerIdByApi.get(api) ?? null;
+      }
+    }
+
+    if (rows.length > 0) {
+      const { error: insErr } = await supabase
+        .from("football_player_match_stats")
+        .insert(rows);
+      if (insErr)
+        throw new Error(`Erro ao salvar player stats: ${insErr.message}`);
+    }
+
+    const result: SyncFixturePlayerStatsResult = {
+      syncRunId,
+      api_fixture_id: apiFixtureId,
+      total_player_stats: rows.length,
+    };
+
+    await finishSyncRun(syncRunId, {
+      status: "success",
+      records_created: rows.length,
+      metadata: {
+        api_fixture_id: apiFixtureId,
+        total_player_stats: result.total_player_stats,
+      },
+    });
+
+    return result;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await finishSyncRun(syncRunId, {
+      status: "error",
+      error_message: message,
+    });
+    throw err;
+  }
+}
+
+// ============================================================
 // Helpers de leitura (sem ir à API)
 // ============================================================
 
