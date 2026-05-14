@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test:fixtures:today": "tsx scripts/test-fixtures-today.ts"
+    "test:fixtures:today": "tsx scripts/test-fixtures-today.ts",
+    "test:features:today": "tsx scripts/test-features-today.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
