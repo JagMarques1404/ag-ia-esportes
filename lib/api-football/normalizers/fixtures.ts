@@ -1,4 +1,4 @@
-import "server-only";
+import "@/lib/server-only-guard";
 import type { RawApiLeague } from "./leagues";
 import type { RawApiTeam } from "./teams";
 

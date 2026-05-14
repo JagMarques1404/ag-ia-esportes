@@ -1,4 +1,4 @@
-import "server-only";
+import "@/lib/server-only-guard";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const FREE_PLAN_DAILY_LIMIT = 100;

@@ -7,7 +7,13 @@
  *
  * Rodar:
  *   npm run test:fixtures:today
+ *
+ * AG_IA_SCRIPT_MODE=true diz ao server-only-guard para PULAR o
+ * `import "server-only"` (que sempre lança fora do bundler do Next).
+ * Em produção essa env nunca é setada — server-only continua ativo.
  */
+process.env.AG_IA_SCRIPT_MODE = "true";
+
 import "dotenv/config";
 import { config as loadEnv } from "dotenv";
 import { resolve } from "node:path";

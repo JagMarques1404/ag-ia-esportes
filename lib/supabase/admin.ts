@@ -1,4 +1,4 @@
-import "server-only";
+import "@/lib/server-only-guard";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // Cliente Supabase com SERVICE_ROLE_KEY. Bypassa RLS.

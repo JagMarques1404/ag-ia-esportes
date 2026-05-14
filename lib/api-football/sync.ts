@@ -1,4 +1,4 @@
-import "server-only";
+import "@/lib/server-only-guard";
 import { apiFootballGet } from "./client";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import {

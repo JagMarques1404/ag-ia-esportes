@@ -1,4 +1,4 @@
-import "server-only";
+import "@/lib/server-only-guard";
 import { createHash } from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { assertCanMakeApiRequest } from "./quota";
