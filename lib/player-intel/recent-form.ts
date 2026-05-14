@@ -27,6 +27,17 @@ export interface GetPlayerLastMatchesOptions {
   limit?: number;
   /** Considera apenas jogos antes desta data (YYYY-MM-DD). */
   beforeDate?: string;
+  /**
+   * Considera apenas jogos cujo kickoff_at < este timestamp ISO.
+   * Mais preciso que beforeDate quando dois jogos caem no mesmo dia.
+   */
+  beforeKickoffAt?: string | null;
+  /**
+   * Exclui um fixture específico (uuid local) do histórico.
+   * Anti data-leakage: o jogo que estamos prevendo NUNCA deve entrar
+   * no recent_form do próprio jogador.
+   */
+  excludeFixtureId?: string;
 }
 
 interface PlayerStatRow {
@@ -49,20 +60,29 @@ export async function getPlayerLastMatches(
   apiPlayerId: number,
   options: GetPlayerLastMatchesOptions = {}
 ): Promise<PlayerStatRow[]> {
-  const { limit = 5, beforeDate } = options;
+  const { limit = 5, beforeDate, beforeKickoffAt, excludeFixtureId } = options;
   const supabase = getSupabaseAdmin();
 
-  // Joga LEFT JOIN via select aninhado: filtra por fixture.date < beforeDate.
+  // INNER JOIN com football_fixtures para poder filtrar por data/kickoff.
   let query = supabase
     .from("football_player_match_stats")
     .select(
-      "fixture_id, minutes, shots_total, shots_on, fouls_committed, fouls_drawn, tackles_total, interceptions, yellow_cards, red_cards, passes_total, passes_key, duels_total, duels_won, football_fixtures!inner(date, status)"
+      "fixture_id, minutes, shots_total, shots_on, fouls_committed, fouls_drawn, tackles_total, interceptions, yellow_cards, red_cards, passes_total, passes_key, duels_total, duels_won, football_fixtures!inner(date, kickoff_at, status)"
     )
     .eq("api_player_id", apiPlayerId)
     .in("football_fixtures.status", ["FT", "AET", "PEN"])
     .order("created_at", { ascending: false })
     .limit(limit);
 
+  // Anti data-leakage: nunca usar o próprio fixture analisado.
+  if (excludeFixtureId) {
+    query = query.neq("fixture_id", excludeFixtureId);
+  }
+  // beforeKickoffAt é mais preciso que beforeDate (mesmo dia, jogos
+  // diferentes). Se ambos vierem, aplica os dois.
+  if (beforeKickoffAt) {
+    query = query.lt("football_fixtures.kickoff_at", beforeKickoffAt);
+  }
   if (beforeDate) {
     query = query.lt("football_fixtures.date", beforeDate);
   }

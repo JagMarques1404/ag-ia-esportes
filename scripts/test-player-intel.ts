@@ -50,8 +50,28 @@ async function main() {
     "../lib/api-football/sync"
   );
   const { getQuotaSummary } = await import("../lib/api-football/quota");
+  const { getSupabaseAdmin } = await import("../lib/supabase/admin");
 
   console.log(`→ Player Intel para fixture ${apiFixtureId}\n`);
+
+  // Detecta jogo finalizado para alertar sobre --sync
+  const sb = getSupabaseAdmin();
+  const { data: fxRow } = await sb
+    .from("football_fixtures")
+    .select("status")
+    .eq("api_fixture_id", apiFixtureId)
+    .maybeSingle();
+  const isFinished =
+    fxRow && ["FT", "AET", "PEN"].includes(String(fxRow.status));
+
+  if (syncFirst && isFinished) {
+    console.warn(
+      "⚠ ATENÇÃO: --sync em jogo finalizado baixa stats reais do próprio jogo."
+    );
+    console.warn(
+      "  O motor exclui esse fixture do recent_form para evitar vazamento.\n"
+    );
+  }
 
   if (syncFirst) {
     console.log("→ --sync ativo: chamando lineups + player stats da API...");
@@ -85,11 +105,46 @@ async function main() {
 
   const result = await runFixturePlayerIntel(apiFixtureId);
 
+  // Resumo de sample por jogador (lê recent_form persistido).
+  const apiIds = Array.from(
+    new Set(
+      result.probabilities
+        .map((p) => p.api_player_id)
+        .filter((id): id is number => id != null)
+    )
+  );
+  let avgSample = 0;
+  let withSample = 0;
+  let zeroSample = 0;
+  if (apiIds.length > 0) {
+    const { data: forms } = await sb
+      .from("football_player_recent_form")
+      .select("sample_size")
+      .in("api_player_id", apiIds);
+    const samples = (forms ?? []).map((f) => Number(f.sample_size) || 0);
+    if (samples.length > 0) {
+      avgSample =
+        Math.round((samples.reduce((a, b) => a + b, 0) / samples.length) * 100) /
+        100;
+      withSample = samples.filter((s) => s > 0).length;
+      zeroSample = samples.filter((s) => s === 0).length;
+    }
+  }
+
   console.log("✓ Pipeline player-intel concluído:");
-  console.log(`   jogadores analisados: ${result.players_analyzed}`);
-  console.log(`   matchups gerados:     ${result.matchups_built}`);
-  console.log(`   probabilidades:       ${result.probabilities_generated}`);
-  console.log(`   data_quality média:   ${result.data_quality_avg}`);
+  console.log(`   jogadores analisados:    ${result.players_analyzed}`);
+  console.log(`   matchups gerados:        ${result.matchups_built}`);
+  console.log(`   probabilidades:          ${result.probabilities_generated}`);
+  console.log(`   data_quality média:      ${result.data_quality_avg}`);
+  console.log(`   jogadores c/ histórico:  ${withSample}`);
+  console.log(`   jogadores sem histórico: ${zeroSample}`);
+  console.log(`   sample_size médio:       ${avgSample}`);
+
+  if (zeroSample > 0 && withSample === 0) {
+    console.warn(
+      "\n⚠ Sem histórico anterior suficiente. Não considerar como sinal apostável."
+    );
+  }
 
   if (result.warnings.length > 0) {
     console.log("\n⚠ Warnings:");

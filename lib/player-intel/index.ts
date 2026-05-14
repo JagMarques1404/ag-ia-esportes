@@ -44,6 +44,8 @@ interface FixtureRow {
   api_fixture_id: number;
   home_team_id: string | null;
   away_team_id: string | null;
+  date: string | null;
+  kickoff_at: string | null;
 }
 
 /**
@@ -70,7 +72,9 @@ export async function runFixturePlayerIntel(
 
   const { data: fx, error: fxError } = await supabase
     .from("football_fixtures")
-    .select("id, api_fixture_id, home_team_id, away_team_id")
+    .select(
+      "id, api_fixture_id, home_team_id, away_team_id, date, kickoff_at"
+    )
     .eq("api_fixture_id", apiFixtureId)
     .maybeSingle<FixtureRow>();
   if (fxError) throw new Error(`runFixturePlayerIntel: ${fxError.message}`);
@@ -81,6 +85,8 @@ export async function runFixturePlayerIntel(
 
   const fixtureId = fx.id;
   const apiFx = fx.api_fixture_id;
+  const fixtureDate = fx.date;
+  const fixtureKickoffAt = fx.kickoff_at;
 
   const { data: lineupPlayers } = await supabase
     .from("football_lineup_players")
@@ -122,6 +128,11 @@ export async function runFixturePlayerIntel(
         playerId: lp.player_id,
         apiPlayerId: lp.api_player_id,
         teamId: lp.team_id,
+        // ANTI DATA-LEAKAGE: nunca usar o próprio fixture analisado
+        // como histórico do jogador.
+        excludeFixtureId: fixtureId,
+        beforeKickoffAt: fixtureKickoffAt,
+        beforeDate: fixtureDate ?? undefined,
       });
       await upsertPlayerRecentForm(form);
     } catch (err) {

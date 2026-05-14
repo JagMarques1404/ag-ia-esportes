@@ -196,7 +196,23 @@ export function calculatePlayerActionProbability(
   // Threshold k = ceil(line + 0.5) → prob de pelo menos k.
   const k = Math.max(1, Math.ceil(line + 0.5));
   const baseProb = poissonAtLeast(adjustedLambda, k);
-  const finalProb = clamp(baseProb + mAdj.delta, 0.01, 0.99);
+  let finalProb = clamp(baseProb + mAdj.delta, 0.01, 0.99);
+
+  // ANTI-OVERCONFIDENCE: sample baixo nunca deve gerar pick forte.
+  //   sample_size = 0 → clamp [0.01, 0.10]
+  //   sample_size = 1 → clamp [0.01, 0.35]
+  // Sem isso, o motor pode atribuir 0.99 a um jogador apenas porque
+  // teve 1 (ou 0) jogos no histórico — que historicamente foi o vetor
+  // de data leakage observado em fixtures finalizados.
+  const lowSampleHardCap =
+    form.sample_size === 0 ? 0.10 : form.sample_size < 2 ? 0.35 : null;
+  let lowSampleNote: string | null = null;
+  if (lowSampleHardCap !== null && finalProb > lowSampleHardCap) {
+    finalProb = lowSampleHardCap;
+    lowSampleNote = `sample_size=${form.sample_size} — probabilidade limitada a ${lowSampleHardCap.toFixed(2)} por segurança`;
+  } else if (lowSampleHardCap !== null) {
+    lowSampleNote = `sample_size=${form.sample_size} — prob abaixo do hard-cap, mantida`;
+  }
 
   // Confidence = data_quality × (1 - |delta_matchup|*2)
   const confidence = roundDecimal(
@@ -233,6 +249,7 @@ export function calculatePlayerActionProbability(
       minutes_reason: minAdj.reason,
       sample_size: form.sample_size,
       limitations: [
+        ...(lowSampleNote ? [lowSampleNote] : []),
         ...(form.sample_size < 4
           ? [`sample_size=${form.sample_size} < 4 — confiança limitada`]
           : []),
