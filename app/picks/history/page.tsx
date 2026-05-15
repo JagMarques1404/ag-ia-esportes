@@ -9,6 +9,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PublicHeader } from "@/components/public-header";
+import { PickMarketsList } from "@/components/pick-markets-list";
 import { getPickHistory } from "@/lib/ai/analyst-tools";
 import type { PickHistoryFilters } from "@/lib/ai/analyst-tools";
 
@@ -203,17 +204,28 @@ export default async function PicksHistoryPage({
                   </CardTitle>
                   <p className="text-xs text-muted-foreground">{p.league}</p>
                 </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <div className="space-y-1">
-                    {p.markets.map((m, i) => (
-                      <div key={i} className="text-muted-foreground">
-                        <span className="font-medium text-foreground">
-                          {m.player}
-                        </span>
-                        : {m.market}
-                      </div>
-                    ))}
-                  </div>
+                <CardContent className="space-y-3 text-sm">
+                  {p.legs_summary && p.legs_summary.total > 0 && (
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      Pernas:{" "}
+                      <span className="text-green-400">
+                        {p.legs_summary.green} green
+                      </span>
+                      {" · "}
+                      <span className="text-destructive">
+                        {p.legs_summary.red} red
+                      </span>
+                      {p.legs_summary.void > 0 && (
+                        <>
+                          {" · "}
+                          <span className="text-muted-foreground">
+                            {p.legs_summary.void} void
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <PickMarketsList pick={p} />
                   {p.result_notes && (
                     <div className="rounded-md border border-border/40 bg-muted/40 p-3 text-xs">
                       <strong className="text-foreground">Resultado:</strong>{" "}

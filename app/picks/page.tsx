@@ -1,7 +1,6 @@
 import Link from "next/link";
 import {
   AlertTriangleIcon,
-  CheckCircle2Icon,
   ClockIcon,
   LockIcon,
   ShieldAlertIcon,
@@ -17,6 +16,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PublicHeader } from "@/components/public-header";
+import { PickMarketsList } from "@/components/pick-markets-list";
 import { getPicksByDate } from "@/lib/ai/analyst-tools";
 import type { DailyPick } from "@/lib/ai/analyst-tools";
 
@@ -245,26 +245,39 @@ export default async function PicksPage({
 
                 <CardContent className="flex flex-1 flex-col gap-4">
                   <div className="space-y-2">
-                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Mercados
+                    <div className="flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground">
+                      <span>Mercados</span>
+                      {p.legs_summary && p.legs_summary.total > 0 && (
+                        <span>
+                          <span className="text-green-400">{p.legs_summary.green}</span>
+                          {" / "}
+                          <span className="text-destructive">{p.legs_summary.red}</span>
+                          {" / "}
+                          <span className="text-muted-foreground">{p.legs_summary.void}</span>
+                          {p.legs_summary.pending > 0 && (
+                            <>
+                              {" · "}
+                              <span>{p.legs_summary.pending} pend.</span>
+                            </>
+                          )}
+                        </span>
+                      )}
                     </div>
-                    <ul className="space-y-2">
-                      {p.markets.map((m, i) => (
-                        <li
-                          key={i}
-                          className="flex items-start gap-2 text-sm"
-                        >
-                          <CheckCircle2Icon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                          <span>
-                            <span className="font-medium">{m.player}</span>{" "}
-                            <span className="text-muted-foreground">
-                              {m.market}
-                            </span>
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                    <PickMarketsList pick={p} />
                   </div>
+                  {p.result_notes && (
+                    <div className="rounded-md border border-border/40 bg-muted/40 p-3 text-xs text-muted-foreground">
+                      <strong className="text-foreground">Resultado:</strong> {p.result_notes}
+                    </div>
+                  )}
+                  {isLoggedIn && !p.is_example && (
+                    <Link
+                      href={`/admin/picks/${p.id}/settle`}
+                      className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    >
+                      Marcar resultado
+                    </Link>
+                  )}
 
                   <div className="rounded-md border border-border/40 bg-muted/40 p-3 text-xs text-muted-foreground">
                     <strong className="text-foreground">Racional:</strong>{" "}

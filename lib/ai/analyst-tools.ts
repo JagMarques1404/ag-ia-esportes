@@ -33,10 +33,25 @@ export interface RecentBetSummary extends OpenBetSummary {
 
 /**
  * Picks do dia normalizadas para a UI/IA. Origem agora é a tabela
- * `public_picks` (migration 009). Quando o banco estiver vazio
- * para a data, devolvemos um conjunto de exemplo (`is_example=true`)
- * para a vitrine não ficar vazia, e a UI mostra banner claro.
+ * `public_picks` (migration 009) + `public_pick_legs` (migration 010).
+ * Quando o banco estiver vazio para a data, devolvemos um conjunto
+ * de exemplo (`is_example=true`) para a vitrine não ficar vazia, e
+ * a UI mostra banner claro.
  */
+export type PickLegStatus = "pending" | "green" | "red" | "void";
+
+export interface PickLegResult {
+  id: string;
+  position: number;
+  player_name: string;
+  market: string;
+  line: number | null;
+  odd: number | null;
+  actual_value: string | null;
+  result_status: PickLegStatus;
+  result_notes: string | null;
+}
+
 export interface DailyPick {
   id: string;
   match: string;
@@ -45,6 +60,16 @@ export interface DailyPick {
   odd_target: number;
   status: "Pendente" | "Em análise" | "Green" | "Red" | "Void";
   markets: { player: string; market: string }[];
+  /** Legs persistidas em public_pick_legs. Vazio = ainda não settled. */
+  legs?: PickLegResult[];
+  /** Quantos green/red/void/pending — derivado de legs[]. */
+  legs_summary?: {
+    total: number;
+    green: number;
+    red: number;
+    void: number;
+    pending: number;
+  };
   rationale: string;
   warning?: string;
   is_example?: boolean;
@@ -242,6 +267,107 @@ function rowToDailyPick(row: PublicPickRow): DailyPick {
   };
 }
 
+// ============================================================
+// public_pick_legs (resultado por perna)
+// ============================================================
+
+interface PickLegRow {
+  id: string;
+  pick_id: string;
+  position: number;
+  player_name: string;
+  market: string;
+  line: number | null;
+  odd: number | null;
+  actual_value: string | null;
+  result_status: PickLegStatus;
+  result_notes: string | null;
+}
+
+function rowToLegResult(row: PickLegRow): PickLegResult {
+  return {
+    id: row.id,
+    position: Number(row.position ?? 0),
+    player_name: row.player_name,
+    market: row.market,
+    line: row.line == null ? null : Number(row.line),
+    odd: row.odd == null ? null : Number(row.odd),
+    actual_value: row.actual_value,
+    result_status: row.result_status,
+    result_notes: row.result_notes,
+  };
+}
+
+function summarize(legs: PickLegResult[]): DailyPick["legs_summary"] {
+  return {
+    total: legs.length,
+    green: legs.filter((l) => l.result_status === "green").length,
+    red: legs.filter((l) => l.result_status === "red").length,
+    void: legs.filter((l) => l.result_status === "void").length,
+    pending: legs.filter((l) => l.result_status === "pending").length,
+  };
+}
+
+export async function getPickLegs(pickId: string): Promise<PickLegResult[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("public_pick_legs")
+    .select(
+      "id, pick_id, position, player_name, market, line, odd, actual_value, result_status, result_notes"
+    )
+    .eq("pick_id", pickId)
+    .order("position", { ascending: true });
+  if (error) {
+    console.warn(`[getPickLegs] ${error.message}`);
+    return [];
+  }
+  return ((data ?? []) as PickLegRow[]).map(rowToLegResult);
+}
+
+export async function getPickLegsForPicks(
+  pickIds: string[]
+): Promise<Map<string, PickLegResult[]>> {
+  const map = new Map<string, PickLegResult[]>();
+  if (pickIds.length === 0) return map;
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("public_pick_legs")
+    .select(
+      "id, pick_id, position, player_name, market, line, odd, actual_value, result_status, result_notes"
+    )
+    .in("pick_id", pickIds)
+    .order("pick_id", { ascending: true })
+    .order("position", { ascending: true });
+  if (error) {
+    console.warn(`[getPickLegsForPicks] ${error.message}`);
+    return map;
+  }
+  for (const r of (data ?? []) as PickLegRow[]) {
+    const arr = map.get(r.pick_id) ?? [];
+    arr.push(rowToLegResult(r));
+    map.set(r.pick_id, arr);
+  }
+  return map;
+}
+
+/**
+ * Anexa legs+summary a uma lista de picks. Pula picks com is_example.
+ */
+async function attachLegs(picks: DailyPick[]): Promise<DailyPick[]> {
+  const realIds = picks.filter((p) => !p.is_example).map((p) => p.id);
+  if (realIds.length === 0) return picks;
+  const map = await getPickLegsForPicks(realIds);
+  return picks.map((p) => {
+    if (p.is_example) return p;
+    const legs = map.get(p.id) ?? [];
+    return {
+      ...p,
+      legs,
+      legs_summary: legs.length > 0 ? summarize(legs) : undefined,
+    };
+  });
+}
+
 /** Conjunto de exemplo usado quando ainda não há picks publicadas. */
 function getExamplePicks(): DailyPick[] {
   return [
@@ -318,7 +444,8 @@ export async function getPicksByDate(date: string): Promise<DailyPick[]> {
     console.warn(`[getPicksByDate] ${error.message}`);
     return [];
   }
-  return ((data ?? []) as PublicPickRow[]).map(rowToDailyPick);
+  const picks = ((data ?? []) as PublicPickRow[]).map(rowToDailyPick);
+  return attachLegs(picks);
 }
 
 /**
@@ -379,11 +506,13 @@ export async function getPickHistory(
     console.warn(`[getPickHistory] ${error.message}`);
     return [];
   }
-  return ((data ?? []) as PublicPickRow[])
+  const base = ((data ?? []) as PublicPickRow[])
     .map(rowToDailyPick)
     .filter((p): p is PickHistoryItem =>
       ["Green", "Red", "Void"].includes(p.status)
     );
+  const enriched = await attachLegs(base);
+  return enriched as PickHistoryItem[];
 }
 
 // ============================================================

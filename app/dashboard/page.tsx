@@ -4,6 +4,7 @@ import { Navbar } from "@/components/navbar";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { getTodayPicks, type DailyPick } from "@/lib/ai/analyst-tools";
+import { PickMarketsList } from "@/components/pick-markets-list";
 import {
   Wallet,
   TrendingUp,
@@ -357,17 +358,22 @@ function DashboardPickCard({ pick }: { pick: DailyPick }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3">
-        <ul className="space-y-1.5 text-sm">
-          {pick.markets.slice(0, 3).map((m, i) => (
-            <li key={i} className="flex items-start gap-2">
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-              <span>
-                <span className="font-medium">{m.player}</span>{" "}
-                <span className="text-muted-foreground">{m.market}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
+        <PickMarketsList pick={pick} compact limit={3} />
+        {pick.legs_summary && pick.legs_summary.total > 0 && (
+          <div className="text-[11px] text-muted-foreground">
+            <span className="text-green-400">{pick.legs_summary.green}</span>
+            {" / "}
+            <span className="text-destructive">{pick.legs_summary.red}</span>
+            {" / "}
+            <span>{pick.legs_summary.void} void</span>
+            {pick.legs_summary.pending > 0 && (
+              <>
+                {" · "}
+                <span>{pick.legs_summary.pending} pend.</span>
+              </>
+            )}
+          </div>
+        )}
         {pick.is_example && (
           <span className="inline-flex w-fit items-center rounded-md border border-yellow-500/40 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-400">
             Exemplo · sem pick real
