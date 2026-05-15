@@ -29,7 +29,8 @@ export async function updateSession(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
   const isAuthPage = path.startsWith("/auth");
-  const isPublic = path === "/" || isAuthPage;
+  // Rotas públicas: landing, página de picks (vitrine), auth.
+  const isPublic = path === "/" || path.startsWith("/picks") || isAuthPage;
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();
