@@ -108,7 +108,7 @@ async function handleExplainPick(
   userId: string,
   intent: ParsedIntent
 ): Promise<string> {
-  const picks = getTodayPicks(userId);
+  const picks = await getTodayPicks(userId);
   const pick = findBestPickForHint(picks, intent.matchHint ?? intent.raw);
   if (!pick) {
     return "Não encontrei picks publicadas para hoje. Tente novamente quando o board do dia estiver gerado.";
@@ -138,11 +138,11 @@ async function handleExplainPick(
   return lines.join("\n") + RESPONSIBILITY_FOOTER;
 }
 
-function handleBuildCombo(
+async function handleBuildCombo(
   userId: string,
   intent: ParsedIntent
-): string {
-  const picks = getTodayPicks(userId);
+): Promise<string> {
+  const picks = await getTodayPicks(userId);
   const pick = findBestPickForHint(picks, intent.matchHint);
   const target = intent.oddTarget ?? 3.0;
 
@@ -178,7 +178,7 @@ async function handleSaveBet(
   sessionId: string,
   intent: ParsedIntent
 ): Promise<{ text: string; pending_action: PendingActionRow }> {
-  const picks = getTodayPicks(userId);
+  const picks = await getTodayPicks(userId);
   const pick = findBestPickForHint(picks, intent.matchHint);
   const stake = intent.amount;
 
@@ -262,7 +262,7 @@ async function handleSaveReminder(
   sessionId: string,
   intent: ParsedIntent
 ): Promise<{ text: string; pending_action: PendingActionRow }> {
-  const picks = getTodayPicks(userId);
+  const picks = await getTodayPicks(userId);
   const pick = findBestPickForHint(picks, intent.matchHint);
   const minutesBefore = intent.reminderMinutesBefore ?? 30;
 
@@ -381,7 +381,7 @@ async function runDeterministic(args: {
         text = await handleExplainPick(userId, intent);
         break;
       case "build_combo":
-        text = handleBuildCombo(userId, intent);
+        text = await handleBuildCombo(userId, intent);
         break;
       case "save_bet": {
         const r = await handleSaveBet(userId, sessionId, intent);
@@ -437,16 +437,17 @@ async function fetchSessionHistory(
 }
 
 async function buildUserContext(userId: string) {
-  const [bankroll, openBets, recent] = await Promise.all([
+  const [bankroll, openBets, recent, todayPicks] = await Promise.all([
     getUserBankroll(userId).catch(() => null),
     getOpenBets(userId).catch(() => []),
     getRecentBetHistory(userId, 5).catch(() => []),
+    getTodayPicks(userId).catch(() => []),
   ]);
   return {
     bankroll,
     open_bets: openBets,
     recent_history: recent,
-    today_picks: getTodayPicks(userId),
+    today_picks: todayPicks,
   };
 }
 

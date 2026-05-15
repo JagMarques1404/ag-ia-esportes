@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { Navbar } from "@/components/navbar";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
+import { getTodayPicks, type DailyPick } from "@/lib/ai/analyst-tools";
 import {
   Wallet,
   TrendingUp,
@@ -41,6 +42,10 @@ export default async function DashboardPage() {
     .eq("user_id", user.id)
     .eq("status", "open")
     .order("placed_at", { ascending: false });
+
+  // Picks do dia (real → public_picks; vazio → exemplos com is_example)
+  const todayPicks = await getTodayPicks(user.id);
+  const picksAreReal = todayPicks.length > 0 && !todayPicks[0].is_example;
 
   const balance = dashboard?.current_balance ?? 0;
   const pnlToday = dashboard?.pnl_today ?? 0;
@@ -200,7 +205,7 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Picks do Dia (mock — será populado pelo motor) */}
+        {/* Picks do Dia — leitura real de public_picks (com fallback exemplo) */}
         <section>
           <div className="mb-3 flex items-end justify-between gap-3">
             <div>
@@ -211,9 +216,15 @@ export default async function DashboardPage() {
               <p className="text-sm text-muted-foreground">
                 Entradas sugeridas com base em leitura estatística, contexto do jogo e gestão de risco.
               </p>
-              <p className="mt-1 text-[11px] text-yellow-400/80">
-                Preview mock — picks reais por data ainda não publicadas (Fase 5.4B).
-              </p>
+              {picksAreReal ? (
+                <p className="mt-1 text-[11px] text-primary/80">
+                  Picks publicadas para hoje · {todayPicks.length} entrada(s).
+                </p>
+              ) : (
+                <p className="mt-1 text-[11px] text-yellow-400/80">
+                  Preview com exemplos — sem pick publicada ainda para hoje.
+                </p>
+              )}
             </div>
             <div className="hidden sm:flex gap-2">
               <Button asChild size="sm" variant="outline">
@@ -226,103 +237,9 @@ export default async function DashboardPage() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
-            {/* Card 1 — Segura */}
-            <Card className="border-green-500/30 bg-green-500/5 flex flex-col">
-              <CardHeader className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="inline-flex items-center rounded-full border border-green-500/40 bg-green-500/20 px-2.5 py-0.5 text-xs font-medium text-green-400">
-                    Segura
-                  </span>
-                  <span className="text-xs text-muted-foreground">Pendente</span>
-                </div>
-                <CardTitle className="text-base">Vitória × Flamengo</CardTitle>
-                <CardDescription className="text-xs">
-                  Copa do Brasil · Odd alvo <span className="font-bold text-primary">1.90</span>
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-1 flex-col gap-3">
-                <ul className="space-y-1.5 text-sm">
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                    <span>
-                      <span className="font-medium">Bruno Henrique</span>{" "}
-                      <span className="text-muted-foreground">+2.5 finalizações</span>
-                    </span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                    <span>
-                      <span className="font-medium">Carrascal</span>{" "}
-                      <span className="text-muted-foreground">+1.5 finalizações</span>
-                    </span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                    <span>
-                      <span className="font-medium">José Vitor</span>{" "}
-                      <span className="text-muted-foreground">+1.5 faltas cometidas</span>
-                    </span>
-                  </li>
-                </ul>
-                <Button asChild size="sm" variant="outline" className="mt-auto">
-                  <Link href="/picks">Ver análise completa</Link>
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Card 2 — Valor */}
-            <Card className="border-yellow-500/30 bg-yellow-500/5 flex flex-col">
-              <CardHeader className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="inline-flex items-center rounded-full border border-yellow-500/40 bg-yellow-500/20 px-2.5 py-0.5 text-xs font-medium text-yellow-400">
-                    Valor
-                  </span>
-                  <span className="text-xs text-muted-foreground">Em análise</span>
-                </div>
-                <CardTitle className="text-base">Vitória × Flamengo</CardTitle>
-                <CardDescription className="text-xs">
-                  Copa do Brasil · Odd alvo <span className="font-bold text-primary">3.20</span>
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-1 flex-col gap-3">
-                <p className="text-xs text-muted-foreground">
-                  Versão mais agressiva da entrada Segura, com Pedro entrando na zona de finalização.
-                </p>
-                <span className="inline-flex w-fit items-center rounded-md border border-yellow-500/40 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-400">
-                  Modelo de exemplo
-                </span>
-                <Button asChild size="sm" variant="outline" className="mt-auto">
-                  <Link href="/picks">Ver análise completa</Link>
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Card 3 — Mega */}
-            <Card className="border-purple-500/30 bg-purple-500/5 flex flex-col">
-              <CardHeader className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="inline-flex items-center rounded-full border border-purple-500/40 bg-purple-500/20 px-2.5 py-0.5 text-xs font-medium text-purple-400">
-                    Mega
-                  </span>
-                  <span className="text-xs text-muted-foreground">Em análise</span>
-                </div>
-                <CardTitle className="text-base">Vitória × Flamengo</CardTitle>
-                <CardDescription className="text-xs">
-                  Copa do Brasil · Odd alvo <span className="font-bold text-primary">8.20</span>
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-1 flex-col gap-3">
-                <p className="text-xs text-muted-foreground">
-                  Combinação de alta variância. Cada perna é plausível, multiplicar derruba a probabilidade.
-                </p>
-                <span className="inline-flex w-fit items-center rounded-md border border-purple-500/40 bg-purple-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-purple-400">
-                  Alta variância
-                </span>
-                <Button asChild size="sm" variant="outline" className="mt-auto">
-                  <Link href="/picks">Ver análise completa</Link>
-                </Button>
-              </CardContent>
-            </Card>
+            {todayPicks.map((p) => (
+              <DashboardPickCard key={p.id} pick={p} />
+            ))}
           </div>
 
           {/* CTAs mobile (no md, ficam no header acima) */}
@@ -385,5 +302,81 @@ export default async function DashboardPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+// ============================================================
+// Pick card (dashboard) — versão compacta da pick para o grid de 3
+// ============================================================
+
+const DASH_RISK_STYLE: Record<
+  DailyPick["risk"],
+  { card: string; badge: string }
+> = {
+  Segura: {
+    card: "border-green-500/30 bg-green-500/5",
+    badge:
+      "border border-green-500/40 bg-green-500/20 text-green-400",
+  },
+  Valor: {
+    card: "border-yellow-500/30 bg-yellow-500/5",
+    badge:
+      "border border-yellow-500/40 bg-yellow-500/20 text-yellow-400",
+  },
+  Mega: {
+    card: "border-purple-500/30 bg-purple-500/5",
+    badge:
+      "border border-purple-500/40 bg-purple-500/20 text-purple-400",
+  },
+};
+
+function DashboardPickCard({ pick }: { pick: DailyPick }) {
+  const styles = DASH_RISK_STYLE[pick.risk];
+  return (
+    <Card className={`${styles.card} flex flex-col`}>
+      <CardHeader className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span
+            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${styles.badge}`}
+          >
+            {pick.risk}
+          </span>
+          <span className="text-xs text-muted-foreground">{pick.status}</span>
+        </div>
+        <CardTitle className="text-base">{pick.match}</CardTitle>
+        <CardDescription className="text-xs">
+          {pick.league}
+          {pick.odd_target ? (
+            <>
+              {" · Odd alvo "}
+              <span className="font-bold text-primary">
+                {pick.odd_target.toFixed(2)}
+              </span>
+            </>
+          ) : null}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-3">
+        <ul className="space-y-1.5 text-sm">
+          {pick.markets.slice(0, 3).map((m, i) => (
+            <li key={i} className="flex items-start gap-2">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <span>
+                <span className="font-medium">{m.player}</span>{" "}
+                <span className="text-muted-foreground">{m.market}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+        {pick.is_example && (
+          <span className="inline-flex w-fit items-center rounded-md border border-yellow-500/40 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-400">
+            Exemplo · sem pick real
+          </span>
+        )}
+        <Button asChild size="sm" variant="outline" className="mt-auto">
+          <Link href="/picks">Ver análise completa</Link>
+        </Button>
+      </CardContent>
+    </Card>
   );
 }

@@ -32,10 +32,10 @@ export interface RecentBetSummary extends OpenBetSummary {
 }
 
 /**
- * Mock estável de Picks do Dia. Espelha o conteúdo do dashboard
- * /picks. Quando houver tabela de picks publicadas, esta função
- * lerá do banco. Recebe userId só para preservar a assinatura
- * "tool por usuário", embora hoje todos vejam o mesmo conteúdo.
+ * Picks do dia normalizadas para a UI/IA. Origem agora é a tabela
+ * `public_picks` (migration 009). Quando o banco estiver vazio
+ * para a data, devolvemos um conjunto de exemplo (`is_example=true`)
+ * para a vitrine não ficar vazia, e a UI mostra banner claro.
  */
 export interface DailyPick {
   id: string;
@@ -43,9 +43,14 @@ export interface DailyPick {
   league: string;
   risk: "Segura" | "Valor" | "Mega";
   odd_target: number;
-  status: "Pendente" | "Em análise";
+  status: "Pendente" | "Em análise" | "Green" | "Red" | "Void";
   markets: { player: string; market: string }[];
   rationale: string;
+  warning?: string;
+  is_example?: boolean;
+  pick_date?: string;
+  kickoff_at?: string | null;
+  result_notes?: string | null;
 }
 
 export interface DraftBetPayload {
@@ -171,15 +176,77 @@ export async function getRecentBetHistory(
   return (data ?? []) as RecentBetSummary[];
 }
 
-/**
- * Mock estável das Picks do Dia v0.1. Espelho do conteúdo de
- * /picks e do dashboard. userId reservado para evolução futura.
- */
-export function getTodayPicks(_userId: string): DailyPick[] {
-  void _userId;
+// ============================================================
+// Picks (public_picks) — leitura real + fallback exemplo
+// ============================================================
+
+interface PublicPickRow {
+  id: string;
+  pick_date: string;
+  title: string;
+  match_name: string;
+  league_name: string | null;
+  api_fixture_id: number | null;
+  kickoff_at: string | null;
+  risk_level: "safe" | "value" | "mega";
+  status: "draft" | "published" | "green" | "red" | "void";
+  odd_target: number | null;
+  confidence: number | null;
+  rationale: string | null;
+  warning: string | null;
+  markets: unknown;
+  result_notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const RISK_LABEL: Record<PublicPickRow["risk_level"], DailyPick["risk"]> = {
+  safe: "Segura",
+  value: "Valor",
+  mega: "Mega",
+};
+
+const STATUS_LABEL: Record<PublicPickRow["status"], DailyPick["status"]> = {
+  draft: "Em análise",
+  published: "Pendente",
+  green: "Green",
+  red: "Red",
+  void: "Void",
+};
+
+function todayString(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+function rowToDailyPick(row: PublicPickRow): DailyPick {
+  const markets = Array.isArray(row.markets)
+    ? (row.markets as Array<{ player?: string; market?: string }>).map((m) => ({
+        player: String(m.player ?? "?"),
+        market: String(m.market ?? "?"),
+      }))
+    : [];
+  return {
+    id: row.id,
+    match: row.match_name,
+    league: row.league_name ?? "?",
+    risk: RISK_LABEL[row.risk_level],
+    odd_target: Number(row.odd_target ?? 0) || 0,
+    status: STATUS_LABEL[row.status],
+    markets,
+    rationale: row.rationale ?? row.title,
+    warning: row.warning ?? undefined,
+    is_example: false,
+    pick_date: row.pick_date,
+    kickoff_at: row.kickoff_at,
+    result_notes: row.result_notes,
+  };
+}
+
+/** Conjunto de exemplo usado quando ainda não há picks publicadas. */
+function getExamplePicks(): DailyPick[] {
   return [
     {
-      id: "vitoria-flamengo-segura",
+      id: "example-vitoria-flamengo-segura",
       match: "Vitória × Flamengo",
       league: "Copa do Brasil",
       risk: "Segura",
@@ -191,10 +258,11 @@ export function getTodayPicks(_userId: string): DailyPick[] {
         { player: "José Vitor", market: "+1.5 faltas cometidas" },
       ],
       rationale:
-        "Roteiro manual baseado em domínio territorial esperado do Flamengo, volume ofensivo e pressão sobre a defesa do Vitória. Esta prévia ainda não usa sample histórico automatizado.",
+        "Roteiro manual baseado em domínio territorial esperado do Flamengo. Esta é uma pick de EXEMPLO até a publicação real do dia.",
+      is_example: true,
     },
     {
-      id: "vitoria-flamengo-valor",
+      id: "example-vitoria-flamengo-valor",
       match: "Vitória × Flamengo",
       league: "Copa do Brasil",
       risk: "Valor",
@@ -206,10 +274,12 @@ export function getTodayPicks(_userId: string): DailyPick[] {
         { player: "Allan", market: "+1.5 desarmes" },
       ],
       rationale:
-        "Variação mais agressiva. Modelo de exemplo — não é entrada oficial publicada.",
+        "Variação mais agressiva. Pick de EXEMPLO — não é entrada oficial publicada.",
+      warning: "Modelo de exemplo — não é entrada oficial publicada.",
+      is_example: true,
     },
     {
-      id: "vitoria-flamengo-mega",
+      id: "example-vitoria-flamengo-mega",
       match: "Vitória × Flamengo",
       league: "Copa do Brasil",
       risk: "Mega",
@@ -222,9 +292,98 @@ export function getTodayPicks(_userId: string): DailyPick[] {
         { player: "Carrascal", market: "+2 finalizações no gol" },
       ],
       rationale:
-        "Combinação de alta variância. Modelo de exemplo — não é entrada oficial publicada.",
+        "Combinação de alta variância. Pick de EXEMPLO — não é entrada oficial publicada.",
+      warning:
+        "Modelo de exemplo — não é entrada oficial publicada. Alta variância: não usar como stake principal.",
+      is_example: true,
     },
   ];
+}
+
+/**
+ * Picks de uma data específica. Retorna apenas published/green/red/void
+ * (drafts ficam ocultos da vitrine).
+ */
+export async function getPicksByDate(date: string): Promise<DailyPick[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("public_picks")
+    .select(
+      "id, pick_date, title, match_name, league_name, api_fixture_id, kickoff_at, risk_level, status, odd_target, confidence, rationale, warning, markets, result_notes, created_at, updated_at"
+    )
+    .eq("pick_date", date)
+    .in("status", ["published", "green", "red", "void"])
+    .order("kickoff_at", { ascending: true, nullsFirst: false });
+  if (error) {
+    console.warn(`[getPicksByDate] ${error.message}`);
+    return [];
+  }
+  return ((data ?? []) as PublicPickRow[]).map(rowToDailyPick);
+}
+
+/**
+ * Picks de hoje. Se nada publicado, devolve exemplos (`is_example=true`)
+ * para a vitrine não ficar vazia.
+ */
+export async function getTodayPicks(_userId: string): Promise<DailyPick[]> {
+  void _userId;
+  const real = await getPicksByDate(todayString());
+  if (real.length > 0) return real;
+  return getExamplePicks();
+}
+
+export interface PickHistoryFilters {
+  status?: ("green" | "red" | "void")[];
+  riskLevel?: ("safe" | "value" | "mega")[];
+  /** Data mínima inclusive (YYYY-MM-DD). */
+  fromDate?: string;
+  /** Data máxima inclusive (YYYY-MM-DD). */
+  toDate?: string;
+  limit?: number;
+}
+
+export interface PickHistoryItem extends DailyPick {
+  status: "Green" | "Red" | "Void";
+}
+
+/**
+ * Histórico de picks resolvidas. Por padrão, últimas 50.
+ */
+export async function getPickHistory(
+  filters: PickHistoryFilters = {}
+): Promise<PickHistoryItem[]> {
+  const supabase = getSupabaseAdmin();
+  const limit = filters.limit ?? 50;
+  let query = supabase
+    .from("public_picks")
+    .select(
+      "id, pick_date, title, match_name, league_name, api_fixture_id, kickoff_at, risk_level, status, odd_target, confidence, rationale, warning, markets, result_notes, created_at, updated_at"
+    )
+    .order("pick_date", { ascending: false })
+    .order("kickoff_at", { ascending: false, nullsFirst: false })
+    .limit(limit);
+
+  if (filters.status && filters.status.length > 0) {
+    query = query.in("status", filters.status);
+  } else {
+    query = query.in("status", ["green", "red", "void"]);
+  }
+  if (filters.riskLevel && filters.riskLevel.length > 0) {
+    query = query.in("risk_level", filters.riskLevel);
+  }
+  if (filters.fromDate) query = query.gte("pick_date", filters.fromDate);
+  if (filters.toDate) query = query.lte("pick_date", filters.toDate);
+
+  const { data, error } = await query;
+  if (error) {
+    console.warn(`[getPickHistory] ${error.message}`);
+    return [];
+  }
+  return ((data ?? []) as PublicPickRow[])
+    .map(rowToDailyPick)
+    .filter((p): p is PickHistoryItem =>
+      ["Green", "Red", "Void"].includes(p.status)
+    );
 }
 
 // ============================================================
