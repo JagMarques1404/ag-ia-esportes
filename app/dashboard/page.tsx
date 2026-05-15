@@ -366,12 +366,18 @@ export default async function DashboardPage() {
           </Card>
         )}
 
-        <div className="flex gap-3">
-          <Button asChild className="flex-1">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Button asChild>
             <Link href="/bets/new">Nova Aposta</Link>
           </Button>
-          <Button asChild variant="outline" className="flex-1">
+          <Button asChild variant="outline">
             <Link href="/history">Ver Histórico</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/analista" className="inline-flex items-center justify-center gap-2">
+              <SparklesIcon className="h-4 w-4" />
+              Conversar com Analista IA
+            </Link>
           </Button>
         </div>
       </main>
