@@ -145,15 +145,26 @@ async function main() {
   // ============================================================
   const byRec: Record<string, number> = {};
   const byOrigin: Record<string, number> = {};
-  const playersWithSample = new Set<number>();
-  const playersZeroSample = new Set<number>();
+  // Sample por jogador (uma entry por api_player_id; usamos o sample
+  // máximo já que é igual entre ações do mesmo jogador no v0.2).
+  const sampleByPlayer = new Map<number, number>();
   for (const r of board) {
     byRec[r.recommendation ?? "?"] = (byRec[r.recommendation ?? "?"] ?? 0) + 1;
     byOrigin[r.data_origin ?? "?"] = (byOrigin[r.data_origin ?? "?"] ?? 0) + 1;
     if (r.api_player_id != null) {
-      if (r.sample_size > 0) playersWithSample.add(r.api_player_id);
-      else playersZeroSample.add(r.api_player_id);
+      const cur = sampleByPlayer.get(r.api_player_id) ?? 0;
+      if (r.sample_size > cur) sampleByPlayer.set(r.api_player_id, r.sample_size);
     }
+  }
+
+  // Buckets
+  let buck0 = 0;
+  let buck12 = 0;
+  let buck3plus = 0;
+  for (const n of sampleByPlayer.values()) {
+    if (n === 0) buck0++;
+    else if (n <= 2) buck12++;
+    else buck3plus++;
   }
 
   console.log(`\n=== Board ===`);
@@ -166,8 +177,10 @@ async function main() {
   for (const k of Object.keys(byOrigin).sort()) {
     console.log(`     ${k.padEnd(12)} ${byOrigin[k]}`);
   }
-  console.log(`  jogadores com histórico: ${playersWithSample.size}`);
-  console.log(`  jogadores sem histórico: ${playersZeroSample.size}`);
+  console.log(`  sample buckets (jogadores únicos):`);
+  console.log(`     bucket 0:    ${String(buck0).padStart(3)}`);
+  console.log(`     bucket 1-2:  ${String(buck12).padStart(3)}`);
+  console.log(`     bucket 3+:   ${String(buck3plus).padStart(3)}`);
 
   // ============================================================
   // Top 20 por probability
@@ -194,6 +207,39 @@ async function main() {
       ].join(" ")
     );
   });
+
+  // ============================================================
+  // Top 20 com recomendação "forte"
+  // ============================================================
+  const forteRows = board
+    .filter((r) => r.recommendation === "forte")
+    .sort((a, b) => b.probability - a.probability);
+  console.log(
+    `\n=== Top 20 recomendação "forte" (${forteRows.length} no total) ===`
+  );
+  if (forteRows.length === 0) {
+    console.log("   (nenhum item ainda — sample baixo ou prob abaixo do limiar)");
+  } else {
+    console.log(
+      "rank prob  conf  dq   sample hit   action            line  player                  origin"
+    );
+    forteRows.slice(0, 20).forEach((r, i) => {
+      console.log(
+        [
+          String(i + 1).padStart(3),
+          fmt(r.probability, 3).padStart(5),
+          fmt(r.confidence_score, 2).padStart(4),
+          fmt(r.data_quality_score, 2).padStart(4),
+          String(r.sample_size).padStart(6),
+          fmtPct(r.hit_rate).padStart(4),
+          r.action_key.padEnd(17),
+          fmt(r.line, 1).padStart(4),
+          (r.player_name ?? "?").slice(0, 22).padEnd(22),
+          r.data_origin ?? "?",
+        ].join(" ")
+      );
+    });
+  }
 
   // ============================================================
   // Top 20 por edge (precisa de odd_market)
@@ -242,9 +288,9 @@ async function main() {
   });
 
   // Jogadores sem histórico
-  if (playersZeroSample.size > 0) {
+  if (buck0 > 0) {
     console.log(
-      `\n⚠ ${playersZeroSample.size} jogadores ainda sem histórico (sample=0). Considere rodar collect:player-history nas ligas relevantes.`
+      `\n⚠ ${buck0} jogadores ainda sem histórico (sample=0). Considere rodar collect:player-last5 para o fixture.`
     );
   }
 

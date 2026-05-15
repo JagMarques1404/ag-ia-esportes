@@ -17,6 +17,7 @@ import {
   upsertPlayerActionProbabilities,
   type PlayerActionProbability,
 } from "./actions";
+import { getMatchupBoosts } from "./matchup-matrix";
 
 export interface FixturePlayerIntelResult {
   fixture_id: string;
@@ -173,7 +174,7 @@ export async function runFixturePlayerIntel(
     }
   }
 
-  // 2. Mapear matchups e enriquecer com arquétipos.
+  // 2. Mapear matchups e enriquecer com arquétipos + action_boosts.
   const baseMatchups = await mapDirectMatchups(fixtureId);
   const enrichedMatchups: DirectMatchup[] = baseMatchups.map((m) => {
     const myArc =
@@ -186,6 +187,7 @@ export async function runFixturePlayerIntel(
             m.opponent_api_player_id
           ) as DirectMatchup["opponent_archetype"])
         : null;
+    const action_boosts = getMatchupBoosts(myArc, oppArc);
     return {
       ...m,
       player_archetype: myArc,
@@ -194,6 +196,7 @@ export async function runFixturePlayerIntel(
         ...(m.explanation_json as Record<string, unknown>),
         player_archetype: myArc,
         opponent_archetype: oppArc,
+        action_boosts,
       },
     };
   });

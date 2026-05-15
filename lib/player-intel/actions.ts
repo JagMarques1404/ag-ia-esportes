@@ -9,6 +9,11 @@ import {
 import type { Archetype } from "./archetypes";
 import type { PlayerRecentForm, PlayerLast5Series } from "./recent-form";
 import type { DirectMatchup } from "./matchups";
+import {
+  getActionBoost,
+  capMatchupBoost,
+  MAX_MATCHUP_BOOST,
+} from "./matchup-matrix";
 
 /**
  * Ações suportadas no Player Action Board v1.
@@ -180,50 +185,46 @@ function recommend(args: {
 
 /**
  * Ajuste de matchup: bonus/penalidade em pontos percentuais sobre a
- * probabilidade base. Heurísticas v0.1, explicáveis e conservadoras.
+ * probabilidade base.
  *
- * Convenção: retorna 0 a +0.15 quando o oponente FAVORECE a ação,
- * 0 a -0.15 quando o oponente DIFICULTA.
+ * Combina duas fontes:
+ *   1. Pré-computada: matchup.explanation_json.action_boosts[action]
+ *      (preenchida pelo runFixturePlayerIntel via matchup-matrix).
+ *   2. Fallback on-the-fly: getActionBoost(myArc, oppArc, action) — caso
+ *      o boost não tenha sido persistido por algum motivo.
+ *
+ * Total cabe sempre dentro de ±MAX_MATCHUP_BOOST (cap conservador).
  */
 function matchupAdjustment(
   action: PlayerAction,
-  myArchetype: Archetype | null,
-  oppArchetype: Archetype | null
+  matchup: DirectMatchup | null
 ): { delta: number; reason: string } {
+  const myArchetype: Archetype | null = matchup?.player_archetype ?? null;
+  const oppArchetype: Archetype | null = matchup?.opponent_archetype ?? null;
+
   if (!myArchetype || !oppArchetype) {
     return { delta: 0, reason: "sem arquétipos definidos (sample baixo)" };
   }
-  // Foul drawn por driblador vs zagueiro agressivo / faltoso.
-  if (
-    action === "foul_drawn" &&
-    (myArchetype === "winger_dribbler" || myArchetype === "ball_carrier") &&
-    (oppArchetype === "aggressive_defender" || oppArchetype === "foul_committer")
-  ) {
-    return { delta: 0.12, reason: `${myArchetype} vs ${oppArchetype}` };
+
+  // 1. Boost persistido em explanation_json.action_boosts (preferido).
+  const boostsObj =
+    (matchup?.explanation_json as { action_boosts?: Record<string, number> } | null)
+      ?.action_boosts ?? null;
+  let raw = boostsObj && typeof boostsObj[action] === "number" ? boostsObj[action] : 0;
+
+  // 2. Fallback computado se não veio persistido.
+  if (raw === 0) raw = getActionBoost(myArchetype, oppArchetype, action);
+
+  if (raw === 0) {
+    return { delta: 0, reason: `${myArchetype} vs ${oppArchetype} (neutro)` };
   }
-  // Foul committed/cartão por zagueiro agressivo vs driblador.
-  if (
-    (action === "foul_committed" ||
-      action === "yellow_card" ||
-      action === "red_card") &&
-    (myArchetype === "aggressive_defender" || myArchetype === "foul_committer") &&
-    (oppArchetype === "winger_dribbler" || oppArchetype === "ball_carrier")
-  ) {
-    return { delta: 0.10, reason: `${myArchetype} marca ${oppArchetype}` };
-  }
-  // Tackle/interception por ball_winner vs playmaker.
-  if (
-    action === "tackle" &&
-    myArchetype === "ball_winner" &&
-    (oppArchetype === "playmaker" || oppArchetype === "ball_carrier")
-  ) {
-    return { delta: 0.08, reason: "ball_winner vs criador" };
-  }
-  // Shot by finisher vs defesa frágil aérea (sem proxy ainda).
-  if (action === "shot_on" && myArchetype === "striker_finisher") {
-    return { delta: 0.04, reason: "finalizador vs zaga (proxy fraco)" };
-  }
-  return { delta: 0, reason: "matchup neutro" };
+
+  const delta = capMatchupBoost(raw);
+  const capped = Math.abs(raw) > MAX_MATCHUP_BOOST ? " [cap]" : "";
+  return {
+    delta,
+    reason: `${myArchetype} vs ${oppArchetype}${capped}`,
+  };
 }
 
 /**
@@ -285,11 +286,7 @@ export function calculatePlayerActionProbability(
 
   // Base λ: prefere série específica da ação; fallback no form
   const baseLam = series ? series.avg_value : baseLambdaFromForm(form, action);
-  const mAdj = matchupAdjustment(
-    action,
-    matchup?.player_archetype ?? null,
-    matchup?.opponent_archetype ?? null
-  );
+  const mAdj = matchupAdjustment(action, matchup);
   const minAdj = minutesAdjustment(player.is_starting);
 
   // λ ajustado por minutagem; matchup entra como delta na prob final.
