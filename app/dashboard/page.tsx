@@ -3,7 +3,15 @@ import { redirect } from "next/navigation";
 import { Navbar } from "@/components/navbar";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Wallet, TrendingUp, TrendingDown, Activity, AlertTriangle, CheckCircle2 } from "lucide-react";
+import {
+  Wallet,
+  TrendingUp,
+  TrendingDown,
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  SparklesIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
@@ -191,6 +199,139 @@ export default async function DashboardPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Picks do Dia (mock — será populado pelo motor) */}
+        <section>
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <h2 className="flex items-center gap-2 text-xl font-semibold">
+                <SparklesIcon className="h-4 w-4 text-primary" />
+                Picks do Dia
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Entradas sugeridas com base em leitura estatística, contexto do jogo e gestão de risco.
+              </p>
+            </div>
+            <div className="hidden sm:flex gap-2">
+              <Button asChild size="sm" variant="outline">
+                <Link href="/picks">Ver Picks de Hoje</Link>
+              </Button>
+              <Button asChild size="sm">
+                <Link href="/bets/new">Registrar aposta</Link>
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            {/* Card 1 — Segura */}
+            <Card className="border-green-500/30 bg-green-500/5 flex flex-col">
+              <CardHeader className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center rounded-full border border-green-500/40 bg-green-500/20 px-2.5 py-0.5 text-xs font-medium text-green-400">
+                    Segura
+                  </span>
+                  <span className="text-xs text-muted-foreground">Pendente</span>
+                </div>
+                <CardTitle className="text-base">Vitória × Flamengo</CardTitle>
+                <CardDescription className="text-xs">
+                  Copa do Brasil · Odd alvo <span className="font-bold text-primary">1.90</span>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col gap-3">
+                <ul className="space-y-1.5 text-sm">
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <span>
+                      <span className="font-medium">Bruno Henrique</span>{" "}
+                      <span className="text-muted-foreground">+2.5 finalizações</span>
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <span>
+                      <span className="font-medium">Carrascal</span>{" "}
+                      <span className="text-muted-foreground">+1.5 finalizações</span>
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <span>
+                      <span className="font-medium">José Vitor</span>{" "}
+                      <span className="text-muted-foreground">+1.5 faltas cometidas</span>
+                    </span>
+                  </li>
+                </ul>
+                <Button asChild size="sm" variant="outline" className="mt-auto">
+                  <Link href="/picks">Ver análise completa</Link>
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Card 2 — Valor */}
+            <Card className="border-yellow-500/30 bg-yellow-500/5 flex flex-col">
+              <CardHeader className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center rounded-full border border-yellow-500/40 bg-yellow-500/20 px-2.5 py-0.5 text-xs font-medium text-yellow-400">
+                    Valor
+                  </span>
+                  <span className="text-xs text-muted-foreground">Em análise</span>
+                </div>
+                <CardTitle className="text-base">Vitória × Flamengo</CardTitle>
+                <CardDescription className="text-xs">
+                  Copa do Brasil · Odd alvo <span className="font-bold text-primary">3.20</span>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col gap-3">
+                <p className="text-xs text-muted-foreground">
+                  Versão mais agressiva da entrada Segura, com Pedro entrando na zona de finalização.
+                </p>
+                <span className="inline-flex w-fit items-center rounded-md border border-yellow-500/40 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-400">
+                  Modelo de exemplo
+                </span>
+                <Button asChild size="sm" variant="outline" className="mt-auto">
+                  <Link href="/picks">Ver análise completa</Link>
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Card 3 — Mega */}
+            <Card className="border-purple-500/30 bg-purple-500/5 flex flex-col">
+              <CardHeader className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center rounded-full border border-purple-500/40 bg-purple-500/20 px-2.5 py-0.5 text-xs font-medium text-purple-400">
+                    Mega
+                  </span>
+                  <span className="text-xs text-muted-foreground">Em análise</span>
+                </div>
+                <CardTitle className="text-base">Vitória × Flamengo</CardTitle>
+                <CardDescription className="text-xs">
+                  Copa do Brasil · Odd alvo <span className="font-bold text-primary">8.20</span>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col gap-3">
+                <p className="text-xs text-muted-foreground">
+                  Combinação de alta variância. Cada perna é plausível, multiplicar derruba a probabilidade.
+                </p>
+                <span className="inline-flex w-fit items-center rounded-md border border-purple-500/40 bg-purple-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-purple-400">
+                  Alta variância
+                </span>
+                <Button asChild size="sm" variant="outline" className="mt-auto">
+                  <Link href="/picks">Ver análise completa</Link>
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* CTAs mobile (no md, ficam no header acima) */}
+          <div className="mt-4 flex gap-2 sm:hidden">
+            <Button asChild size="sm" variant="outline" className="flex-1">
+              <Link href="/picks">Ver Picks de Hoje</Link>
+            </Button>
+            <Button asChild size="sm" className="flex-1">
+              <Link href="/bets/new">Registrar aposta</Link>
+            </Button>
+          </div>
+        </section>
 
         {/* Apostas abertas */}
         {openBets && openBets.length > 0 && (

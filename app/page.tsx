@@ -2,11 +2,15 @@ import Link from "next/link";
 import {
   ActivityIcon,
   BarChart3Icon,
+  BookCheckIcon,
   BrainCircuitIcon,
   CheckCircle2Icon,
+  GaugeIcon,
+  LineChartIcon,
   ShieldAlertIcon,
   SparklesIcon,
   TargetIcon,
+  WalletIcon,
   ZapIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
@@ -38,11 +42,11 @@ export default async function Home() {
               AG IA Esportes
             </h1>
             <p className="mt-6 text-xl text-foreground sm:text-2xl">
-              Análises esportivas com inteligência de dados.
+              Análise de jogador + gestão de banca em um só lugar.
             </p>
             <p className="mt-4 text-base text-muted-foreground sm:text-lg">
-              Picks diárias com foco em mercados de jogador: finalizações, faltas, desarmes,
-              cartões e participações.
+              Receba picks, monte suas próprias entradas e acompanhe sua banca com disciplina —
+              finalizações, faltas, desarmes, cartões e participações por jogador.
             </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Button asChild size="lg" className="w-full sm:w-auto">
@@ -102,6 +106,58 @@ export default async function Home() {
             </Card>
           ))}
         </div>
+      </section>
+
+      {/* ============================================================ */}
+      {/* GESTÃO DE BANCA INTEGRADA                                     */}
+      {/* ============================================================ */}
+      <section className="container py-16 sm:py-24 border-t border-border/40">
+        <div className="mx-auto mb-12 max-w-2xl text-center">
+          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
+            Gestão de banca integrada
+          </h2>
+          <p className="mt-4 text-muted-foreground">
+            Não é só receber picks. O AG IA Esportes ajuda você a controlar saldo, stake, limite
+            diário, ROI, lucro/prejuízo e histórico de entradas.
+          </p>
+        </div>
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+          {[
+            {
+              icon: WalletIcon,
+              title: "Saldo e limite diário",
+              desc: "Saldo atual, banca inicial e limite de stake por dia. Tudo num lugar só.",
+            },
+            {
+              icon: GaugeIcon,
+              title: "Stake sugerida por risco",
+              desc: "Cada entrada tem stake recomendada de acordo com o risco e a sua banca.",
+            },
+            {
+              icon: LineChartIcon,
+              title: "ROI e histórico transparente",
+              desc: "Lucro/prejuízo por dia, semana, mês. Histórico completo, sem maquiagem.",
+            },
+            {
+              icon: BookCheckIcon,
+              title: "Disciplina e controle emocional",
+              desc: "Stop-loss e stop-win configuráveis. O sistema bloqueia quando você passa do limite.",
+            },
+          ].map((item) => (
+            <Card key={item.title} className="border-border/50 bg-card/50">
+              <CardHeader>
+                <item.icon className="h-8 w-8 text-primary" />
+                <CardTitle className="mt-3 text-lg">{item.title}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">{item.desc}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <p className="mx-auto mt-8 max-w-2xl text-center text-xs text-muted-foreground">
+          Ferramenta de organização e disciplina. Não há garantia de lucro nem recomendação financeira.
+        </p>
       </section>
 
       {/* ============================================================ */}
