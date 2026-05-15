@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Navbar } from "@/components/navbar";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,6 @@ import { formatCurrency, formatDate, formatPercent } from "@/lib/utils";
 import type { Bet, BetLeg, BetStatus } from "@/types";
 
 export default function HistoryPage() {
-  const router = useRouter();
   const supabase = createClient();
   const [bets, setBets] = useState<(Bet & { bet_legs: BetLeg[] })[]>([]);
   const [filter, setFilter] = useState<"all" | "open" | "won" | "lost">("all");
@@ -33,49 +32,6 @@ export default function HistoryPage() {
     }
     load();
   }, [supabase, filter]);
-
-  async function resolveBet(bet: Bet, status: "won" | "lost" | "cashed_out", cashoutValue?: number) {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const resultValue =
-      status === "won" ? bet.potential_return :
-      status === "cashed_out" ? (cashoutValue ?? 0) :
-      0;
-
-    await supabase.from("bets").update({
-      status,
-      result_value: resultValue,
-      settled_at: new Date().toISOString(),
-    }).eq("id", bet.id);
-
-    // Atualiza bankroll
-    const { data: br } = await supabase.from("bankroll").select("*").eq("user_id", user.id).single();
-    if (br) {
-      const newBalance = Number(br.current_balance) + resultValue;
-      const newTotalReturned = Number(br.total_returned) + resultValue;
-      const newStreakType = status === "won" || (status === "cashed_out" && resultValue > Number(bet.total_stake)) ? "win" : "loss";
-      const newStreakCount = br.current_streak_type === newStreakType ? Number(br.current_streak_count) + 1 : 1;
-
-      await supabase.from("bankroll").update({
-        current_balance: newBalance,
-        total_returned: newTotalReturned,
-        current_streak_type: newStreakType,
-        current_streak_count: newStreakCount,
-      }).eq("user_id", user.id);
-
-      await supabase.from("bankroll_log").insert({
-        user_id: user.id,
-        type: status === "won" ? "bet_win" : status === "cashed_out" ? "cashout" : "bet_loss",
-        amount: resultValue,
-        balance_after: newBalance,
-        description: `[bet:${bet.id}] Aposta ${status} — ${bet.tier}`,
-      });
-    }
-
-    router.refresh();
-    setBets(bets.map(b => b.id === bet.id ? { ...b, status, result_value: resultValue } as any : b));
-  }
 
   function statusBadge(status: BetStatus) {
     const styles: Record<BetStatus, string> = {
@@ -165,34 +121,26 @@ export default function HistoryPage() {
                   )}
                 </div>
 
-                {bet.status === "open" && (
-                  <div className="flex gap-2 pt-2">
-                    <Button size="sm" variant="default" onClick={() => resolveBet(bet, "won")}>
-                      Ganhou
-                    </Button>
-                    <Button size="sm" variant="destructive" onClick={() => resolveBet(bet, "lost")}>
-                      Perdeu
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => {
-                      const value = prompt("Valor do cashout (R$):");
-                      if (value) resolveBet(bet, "cashed_out", parseFloat(value));
-                    }}>
-                      Cashout
-                    </Button>
-                  </div>
-                )}
-
-                {bet.status !== "open" && (
-                  <div className="text-sm pt-2 border-t">
-                    <span className="text-muted-foreground">Resultado:</span>{" "}
-                    <span className={`font-medium ${
-                      bet.result_value > bet.total_stake ? "text-green-500" :
-                      bet.result_value < bet.total_stake ? "text-destructive" : ""
-                    }`}>
-                      {formatCurrency(bet.result_value)} ({formatPercent(((bet.result_value - bet.total_stake) / bet.total_stake) * 100)})
-                    </span>
-                  </div>
-                )}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t">
+                  {bet.status !== "open" ? (
+                    <div className="text-sm">
+                      <span className="text-muted-foreground">Resultado:</span>{" "}
+                      <span className={`font-medium ${
+                        bet.result_value > bet.total_stake ? "text-green-500" :
+                        bet.result_value < bet.total_stake ? "text-destructive" : ""
+                      }`}>
+                        {formatCurrency(bet.result_value)} ({formatPercent(((bet.result_value - bet.total_stake) / bet.total_stake) * 100)})
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">
+                      Marque green/red/void por leg para liquidar a aposta.
+                    </div>
+                  )}
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/bets/${bet.id}`}>Abrir aposta</Link>
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           ))}

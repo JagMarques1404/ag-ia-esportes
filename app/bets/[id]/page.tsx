@@ -11,23 +11,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/utils";
+import { BetLegsActions, type LegRow } from "@/components/bet-legs-actions";
 import type { BetStatus } from "@/types";
 
 export const dynamic = "force-dynamic";
-
-interface BetLegRow {
-  id: string;
-  bet_id: string;
-  competition: string | null;
-  home_team: string | null;
-  away_team: string | null;
-  market_type: string | null;
-  selection: string | null;
-  odd_value: number | null;
-  estimated_prob_pct: number | null;
-  result: string | null;
-  position: number | null;
-}
 
 const STATUS_LABELS: Record<BetStatus, string> = {
   open: "Aberta",
@@ -100,7 +87,7 @@ export default async function BetDetailPage({
   const { data: legs } = await supabase
     .from("bet_legs")
     .select(
-      "id, bet_id, competition, home_team, away_team, market_type, selection, odd_value, estimated_prob_pct, result, position"
+      "id, bet_id, competition, home_team, away_team, market_type, selection, odd_value, estimated_prob_pct, result, position, player_name, line, actual_value, notes"
     )
     .eq("bet_id", bet.id)
     .order("position", { ascending: true });
@@ -217,58 +204,18 @@ export default async function BetDetailPage({
           <CardHeader>
             <CardTitle className="text-base">Pernas / Seleções</CardTitle>
             <CardDescription>
-              {legs?.length ?? 0} perna(s) registrada(s)
+              {legs?.length ?? 0} perna(s) — marque green/red/void abaixo para
+              liquidar a aposta automaticamente.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {!legs || legs.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Nenhuma perna registrada nesta aposta.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {(legs as BetLegRow[]).map((l) => (
-                  <div
-                    key={l.id}
-                    className="rounded-md border border-border/40 bg-muted/40 p-3 text-sm"
-                  >
-                    <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <div className="font-medium">
-                        {l.home_team ?? "?"} × {l.away_team ?? "?"}
-                      </div>
-                      {l.odd_value != null && (
-                        <div className="text-xs text-muted-foreground">
-                          Odd: <span className="font-medium">{Number(l.odd_value).toFixed(2)}</span>
-                        </div>
-                      )}
-                    </div>
-                    {l.competition && (
-                      <div className="text-xs text-muted-foreground">
-                        {l.competition}
-                      </div>
-                    )}
-                    <div className="mt-1 text-sm">
-                      {l.market_type ?? "?"}: <strong>{l.selection ?? "?"}</strong>
-                    </div>
-                    {l.result && l.result !== "pending" && (
-                      <div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
-                        resultado: {l.result}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            <BetLegsActions
+              betId={bet.id}
+              initialLegs={(legs ?? []) as LegRow[]}
+              initialBetStatus={bet.status as string}
+            />
           </CardContent>
         </Card>
-
-        <p className="text-xs text-muted-foreground">
-          Resolução de aposta (green/red/void) ainda é feita em{" "}
-          <Link href="/history" className="underline hover:text-foreground">
-            Histórico
-          </Link>
-          . Esta tela ganhará marcação direta na Fase 5.4D/E.
-        </p>
 
         <div className="grid gap-3 sm:grid-cols-3">
           <Button asChild>
