@@ -47,6 +47,10 @@ interface PlayerStatRow {
   shots_on: number | null;
   fouls_committed: number | null;
   fouls_drawn: number | null;
+  goals: number | null;
+  assists: number | null;
+  offsides: number | null;
+  blocks: number | null;
   tackles_total: number | null;
   interceptions: number | null;
   yellow_cards: number | null;
@@ -70,7 +74,7 @@ export async function getPlayerLastMatches(
   let query = supabase
     .from("football_player_match_stats")
     .select(
-      "fixture_id, minutes, shots_total, shots_on, fouls_committed, fouls_drawn, tackles_total, interceptions, yellow_cards, red_cards, passes_total, passes_key, duels_total, duels_won, football_fixtures!inner(date, kickoff_at, status)"
+      "fixture_id, minutes, shots_total, shots_on, fouls_committed, fouls_drawn, goals, assists, offsides, blocks, tackles_total, interceptions, yellow_cards, red_cards, passes_total, passes_key, duels_total, duels_won, football_fixtures!inner(date, kickoff_at, status)"
     )
     .eq("api_player_id", apiPlayerId)
     .in("football_fixtures.status", ["FT", "AET", "PEN"])
@@ -100,6 +104,10 @@ export async function getPlayerLastMatches(
     shots_on: (r.shots_on as number | null) ?? null,
     fouls_committed: (r.fouls_committed as number | null) ?? null,
     fouls_drawn: (r.fouls_drawn as number | null) ?? null,
+    goals: (r.goals as number | null) ?? null,
+    assists: (r.assists as number | null) ?? null,
+    offsides: (r.offsides as number | null) ?? null,
+    blocks: (r.blocks as number | null) ?? null,
     tackles_total: (r.tackles_total as number | null) ?? null,
     interceptions: (r.interceptions as number | null) ?? null,
     yellow_cards: (r.yellow_cards as number | null) ?? null,
@@ -108,6 +116,115 @@ export async function getPlayerLastMatches(
     duels_total: (r.duels_total as number | null) ?? null,
     duels_won: (r.duels_won as number | null) ?? null,
   }));
+}
+
+// ============================================================
+// Last 5 por ação — versão "valores brutos" (não só média)
+// ============================================================
+
+export type Last5Action =
+  | "shot"
+  | "shot_on"
+  | "foul_committed"
+  | "foul_drawn"
+  | "tackle"
+  | "yellow_card"
+  | "red_card"
+  | "offside"
+  | "goal"
+  | "assist"
+  | "key_pass"
+  | "block";
+
+export interface PlayerLast5Series {
+  api_player_id: number;
+  action_key: Last5Action;
+  values_last_5: number[];
+  sample_size: number;
+  avg_value: number;
+  hit_rate_over_0_5: number; // % de jogos com valor ≥ 1
+  hit_rate_over_1_5: number; // % de jogos com valor ≥ 2
+  hit_rate_over_2_5: number; // % de jogos com valor ≥ 3
+  minutes_avg: number;
+  last_fixture_ids: string[];
+  data_quality_score: number;
+  data_origin: "db" | "contextual";
+}
+
+const ACTION_TO_COLUMN: Record<Last5Action, keyof PlayerStatRow> = {
+  shot: "shots_total",
+  shot_on: "shots_on",
+  foul_committed: "fouls_committed",
+  foul_drawn: "fouls_drawn",
+  tackle: "tackles_total",
+  yellow_card: "yellow_cards",
+  red_card: "red_cards",
+  offside: "offsides",
+  goal: "goals",
+  assist: "assists",
+  key_pass: "passes_key",
+  block: "blocks",
+};
+
+function dataQualityFromSample(n: number): number {
+  if (n <= 1) return 0.2;
+  if (n <= 3) return 0.5;
+  return 0.8;
+}
+
+function hitRateAtLeast(values: number[], threshold: number): number {
+  if (values.length === 0) return 0;
+  const hits = values.filter((v) => v >= threshold).length;
+  return roundDecimal(hits / values.length, 4);
+}
+
+/**
+ * Série dos últimos N (default 5) jogos do jogador para uma ação
+ * específica. Retorna valores brutos por jogo + sample_size +
+ * hit_rates por linha (0.5 / 1.5 / 2.5).
+ *
+ * Usa apenas dados do banco. Sem chamada externa. Anti data-leakage:
+ * o caller deve passar `beforeKickoffAt` (ou `excludeFixtureId`) do
+ * fixture sendo previsto.
+ */
+export async function getPlayerLast5ActionSeries(
+  apiPlayerId: number,
+  actionKey: Last5Action,
+  options: GetPlayerLastMatchesOptions = {}
+): Promise<PlayerLast5Series> {
+  const matches = await getPlayerLastMatches(apiPlayerId, {
+    limit: options.limit ?? 5,
+    beforeDate: options.beforeDate,
+    beforeKickoffAt: options.beforeKickoffAt,
+    excludeFixtureId: options.excludeFixtureId,
+  });
+
+  const col = ACTION_TO_COLUMN[actionKey];
+  const values_last_5 = matches.map((m) => Number(m[col] ?? 0) || 0);
+  const minutes = matches.map((m) => Number(m.minutes ?? 0) || 0);
+  const sample_size = matches.length;
+  const sum = (arr: number[]) => arr.reduce((a, b) => a + b, 0);
+
+  return {
+    api_player_id: apiPlayerId,
+    action_key: actionKey,
+    values_last_5,
+    sample_size,
+    avg_value:
+      sample_size > 0
+        ? roundDecimal(safeDivide(sum(values_last_5), sample_size, 0), 3)
+        : 0,
+    hit_rate_over_0_5: hitRateAtLeast(values_last_5, 1),
+    hit_rate_over_1_5: hitRateAtLeast(values_last_5, 2),
+    hit_rate_over_2_5: hitRateAtLeast(values_last_5, 3),
+    minutes_avg:
+      sample_size > 0
+        ? roundDecimal(safeDivide(sum(minutes), sample_size, 0), 2)
+        : 0,
+    last_fixture_ids: matches.map((m) => m.fixture_id),
+    data_quality_score: dataQualityFromSample(sample_size),
+    data_origin: sample_size > 0 ? "db" : "contextual",
+  };
 }
 
 export interface CalculateOptions extends GetPlayerLastMatchesOptions {

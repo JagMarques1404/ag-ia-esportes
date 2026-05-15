@@ -671,6 +671,10 @@ export async function syncFixturePlayerStats(
           fouls_committed: stat.fouls?.committed ?? 0,
           yellow_cards: stat.cards?.yellow ?? 0,
           red_cards: stat.cards?.red ?? 0,
+          // Migration 011 — capturamos offsides + blocks. Provider
+          // não entrega esses campos para todas as ligas; default 0.
+          offsides: stat.offsides ?? 0,
+          blocks: stat.tackles?.blocks ?? 0,
           raw_json: entry,
         });
       }

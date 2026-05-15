@@ -17,7 +17,8 @@
     "report:player-history": "tsx scripts/report-player-history.ts",
     "daily:player-history": "tsx scripts/daily-player-history-pipeline.ts",
     "readiness:player-intel": "tsx scripts/player-intel-readiness.ts",
-    "backfill:player-target": "tsx scripts/targeted-player-backfill.ts"
+    "backfill:player-target": "tsx scripts/targeted-player-backfill.ts",
+    "test:player-action-board": "tsx scripts/test-player-action-board.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

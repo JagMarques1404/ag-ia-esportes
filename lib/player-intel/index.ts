@@ -205,7 +205,9 @@ export async function runFixturePlayerIntel(
     if (m.api_player_id != null) matchupByApiId.set(m.api_player_id, m);
   }
 
-  // 3. Gerar probabilidades para todas as ações de todo titular.
+  // 3. Gerar probabilidades para todas as ações de todo titular,
+  //    agora puxando série dos últimos 5 jogos por (jogador × ação).
+  const { getPlayerLast5ActionSeries } = await import("./recent-form");
   const allProbs: PlayerActionProbability[] = [];
   for (const lp of players) {
     if (!lp.api_player_id) continue;
@@ -214,6 +216,19 @@ export async function runFixturePlayerIntel(
     const matchup = matchupByApiId.get(lp.api_player_id) ?? null;
     const opponentTeamId = matchup?.opponent_team_id ?? null;
     for (const action of PLAYER_ACTIONS) {
+      // Série específica desta ação (já respeita anti-leakage via
+      // beforeKickoffAt/excludeFixtureId herdados do fixture alvo).
+      const series = await getPlayerLast5ActionSeries(
+        lp.api_player_id,
+        action,
+        {
+          limit: 5,
+          excludeFixtureId: fixtureId,
+          beforeKickoffAt: fixtureKickoffAt,
+          beforeDate: fixtureDate ?? undefined,
+        }
+      ).catch(() => undefined);
+
       const prob = calculatePlayerActionProbability(
         {
           fixtureId,
@@ -228,6 +243,10 @@ export async function runFixturePlayerIntel(
           opponentTeamId,
           form,
           matchup,
+          series,
+          // odd_market virá do board manual (UI) ou de fontes externas
+          // — neste runner ainda não temos. Fica null por padrão.
+          oddMarket: null,
         },
         action,
         0.5

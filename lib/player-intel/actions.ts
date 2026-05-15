@@ -7,22 +7,27 @@ import {
   roundDecimal,
 } from "@/lib/features/math";
 import type { Archetype } from "./archetypes";
-import type { PlayerRecentForm } from "./recent-form";
+import type { PlayerRecentForm, PlayerLast5Series } from "./recent-form";
 import type { DirectMatchup } from "./matchups";
 
+/**
+ * Ações suportadas no Player Action Board v1.
+ * `cross` e `aerial_duel` foram OMITIDAS porque o endpoint free do
+ * provider não entrega dado confiável nessas dimensões.
+ */
 export const PLAYER_ACTIONS = [
   "shot",
   "shot_on",
   "foul_committed",
   "foul_drawn",
   "tackle",
-  "card",
-  "key_pass",
-  // Sem dados ainda no schema 003 — gerar com data_quality=0.
-  "cross",
-  "aerial_duel",
-  "block",
+  "yellow_card",
+  "red_card",
   "offside",
+  "goal",
+  "assist",
+  "key_pass",
+  "block",
 ] as const;
 export type PlayerAction = (typeof PLAYER_ACTIONS)[number];
 
@@ -32,15 +37,25 @@ export const ACTION_LABELS: Record<PlayerAction, string> = {
   foul_committed: "Falta cometida",
   foul_drawn: "Falta sofrida",
   tackle: "Desarme",
-  card: "Cartão (amarelo+vermelho)",
-  key_pass: "Passe chave",
-  cross: "Cruzamento",
-  aerial_duel: "Duelo aéreo",
-  block: "Bloqueio",
+  yellow_card: "Cartão amarelo",
+  red_card: "Cartão vermelho",
   offside: "Impedimento",
+  goal: "Gol",
+  assist: "Assistência",
+  key_pass: "Passe chave",
+  block: "Bloqueio (defensivo)",
 };
 
-export const MODEL_VERSION = "player-intel-v0.1" as const;
+export const MODEL_VERSION = "player-intel-v0.2" as const;
+
+export type Recommendation = "forte" | "monitorar" | "evitar";
+export type DataOrigin =
+  | "api"
+  | "db"
+  | "manual"
+  | "contextual"
+  | "mock"
+  | "missing";
 
 export interface PlayerActionProbability {
   fixture_id: string;
@@ -60,6 +75,17 @@ export interface PlayerActionProbability {
   matchup_score: number;
   model_version: typeof MODEL_VERSION;
   explanation_json: Record<string, unknown>;
+  // Migration 011 — board fields
+  odd_market: number | null;
+  last5_values: number[];
+  sample_size: number;
+  hit_rate: number | null;
+  avg_value: number | null;
+  edge: number | null;
+  recommendation: Recommendation;
+  data_origin: DataOrigin;
+  line_label: string | null;
+  rationale: string | null;
 }
 
 // ============================================================
@@ -72,8 +98,21 @@ function dataQualityFromSample(n: number): number {
   return 0.8;
 }
 
-/** Base λ por ação a partir das médias por jogo do recent_form. */
-function baseLambda(form: PlayerRecentForm, action: PlayerAction): number {
+/**
+ * Base λ por ação a partir das médias agregadas (PlayerRecentForm).
+ * Usado SOMENTE como fallback quando não há série dos últimos 5.
+ * Quando o caller passar `series` (PlayerLast5Series), preferimos
+ * `series.avg_value` — é a base mais precisa.
+ *
+ * Para ações que não têm coluna agregada em PlayerRecentForm
+ * (yellow_card/red_card/offside/goal/assist/block), retornamos 0.
+ * Sem série, a probabilidade derivada cai automaticamente no
+ * hard-cap por sample baixo.
+ */
+function baseLambdaFromForm(
+  form: PlayerRecentForm,
+  action: PlayerAction
+): number {
   switch (action) {
     case "shot":
       return form.shots_avg;
@@ -85,17 +124,58 @@ function baseLambda(form: PlayerRecentForm, action: PlayerAction): number {
       return form.fouls_drawn_avg;
     case "tackle":
       return form.tackles_avg;
-    case "card":
-      return form.cards_avg;
     case "key_pass":
       return form.key_passes_avg;
-    case "cross":
-      return form.crosses_avg;
-    case "aerial_duel":
-    case "block":
+    case "yellow_card":
+      // form.cards_avg agrega yellow+red. Aproximamos yellow ≈ 95%.
+      return form.cards_avg * 0.95;
+    case "red_card":
+      return form.cards_avg * 0.05;
     case "offside":
-      return 0; // sem dado granular ainda
+    case "goal":
+    case "assist":
+    case "block":
+      return 0;
   }
+}
+
+function hitRateAtLineFromSeries(
+  series: PlayerLast5Series | undefined,
+  line: number
+): number | null {
+  if (!series || series.values_last_5.length === 0) return null;
+  const k = Math.max(1, Math.ceil(line + 0.5));
+  if (k <= 1) return series.hit_rate_over_0_5;
+  if (k <= 2) return series.hit_rate_over_1_5;
+  if (k <= 3) return series.hit_rate_over_2_5;
+  // Para linhas mais altas, calcula on-the-fly.
+  const hits = series.values_last_5.filter((v) => v >= k).length;
+  return roundDecimal(hits / series.values_last_5.length, 4);
+}
+
+function recommend(args: {
+  sample_size: number;
+  probability: number;
+  data_quality: number;
+  hit_rate: number | null;
+  edge: number | null;
+}): Recommendation {
+  const { sample_size, probability, data_quality, hit_rate, edge } = args;
+  // Evitar: dado insuficiente, ou prob baixa, ou edge negativo
+  if (sample_size <= 1) return "evitar";
+  if (probability < 0.4) return "evitar";
+  if (edge != null && edge < 0) return "evitar";
+  // Forte: tudo positivo
+  const hitOk = hit_rate == null ? true : hit_rate >= 0.6;
+  if (
+    sample_size >= 3 &&
+    probability >= 0.6 &&
+    data_quality >= 0.5 &&
+    hitOk
+  ) {
+    return "forte";
+  }
+  return "monitorar";
 }
 
 /**
@@ -123,7 +203,9 @@ function matchupAdjustment(
   }
   // Foul committed/cartão por zagueiro agressivo vs driblador.
   if (
-    (action === "foul_committed" || action === "card") &&
+    (action === "foul_committed" ||
+      action === "yellow_card" ||
+      action === "red_card") &&
     (myArchetype === "aggressive_defender" || myArchetype === "foul_committer") &&
     (oppArchetype === "winger_dribbler" || oppArchetype === "ball_carrier")
   ) {
@@ -173,6 +255,20 @@ export interface CalculateInput {
   opponentTeamId: string | null;
   form: PlayerRecentForm;
   matchup: DirectMatchup | null;
+  /** Série dos últimos jogos para esta ação (preferido se presente). */
+  series?: PlayerLast5Series;
+  /** Odd de mercado para esta linha (se conhecida pelo caller). */
+  oddMarket?: number | null;
+}
+
+function lineLabelFor(action: PlayerAction, line: number): string {
+  const k = Math.max(1, Math.ceil(line + 0.5));
+  if (action === "yellow_card" || action === "red_card") {
+    return k === 1 ? "leva cartão" : `leva ≥ ${k} cartões`;
+  }
+  if (action === "goal") return k === 1 ? "marca a qualquer momento" : `≥ ${k} gols`;
+  if (action === "assist") return k === 1 ? "dá assistência" : `≥ ${k} assistências`;
+  return `≥ ${k} ${ACTION_LABELS[action].toLowerCase()}`;
 }
 
 export function calculatePlayerActionProbability(
@@ -180,10 +276,15 @@ export function calculatePlayerActionProbability(
   action: PlayerAction,
   line = 0.5
 ): PlayerActionProbability {
-  const { player, form, matchup } = input;
-  const dq = dataQualityFromSample(form.sample_size);
+  const { player, form, matchup, series, oddMarket } = input;
 
-  const baseLam = baseLambda(form, action);
+  // Sample efetivo: preferir series.sample_size se disponível
+  // (mais granular por ação) — senão cai no agregado de form.
+  const sampleSize = series?.sample_size ?? form.sample_size;
+  const dq = series?.data_quality_score ?? dataQualityFromSample(sampleSize);
+
+  // Base λ: prefere série específica da ação; fallback no form
+  const baseLam = series ? series.avg_value : baseLambdaFromForm(form, action);
   const mAdj = matchupAdjustment(
     action,
     matchup?.player_archetype ?? null,
@@ -193,25 +294,19 @@ export function calculatePlayerActionProbability(
 
   // λ ajustado por minutagem; matchup entra como delta na prob final.
   const adjustedLambda = baseLam * minAdj.factor;
-  // Threshold k = ceil(line + 0.5) → prob de pelo menos k.
   const k = Math.max(1, Math.ceil(line + 0.5));
   const baseProb = poissonAtLeast(adjustedLambda, k);
   let finalProb = clamp(baseProb + mAdj.delta, 0.01, 0.99);
 
   // ANTI-OVERCONFIDENCE: sample baixo nunca deve gerar pick forte.
-  //   sample_size = 0 → clamp [0.01, 0.10]
-  //   sample_size = 1 → clamp [0.01, 0.35]
-  // Sem isso, o motor pode atribuir 0.99 a um jogador apenas porque
-  // teve 1 (ou 0) jogos no histórico — que historicamente foi o vetor
-  // de data leakage observado em fixtures finalizados.
   const lowSampleHardCap =
-    form.sample_size === 0 ? 0.10 : form.sample_size < 2 ? 0.35 : null;
+    sampleSize === 0 ? 0.10 : sampleSize < 2 ? 0.35 : null;
   let lowSampleNote: string | null = null;
   if (lowSampleHardCap !== null && finalProb > lowSampleHardCap) {
     finalProb = lowSampleHardCap;
-    lowSampleNote = `sample_size=${form.sample_size} — probabilidade limitada a ${lowSampleHardCap.toFixed(2)} por segurança`;
+    lowSampleNote = `sample_size=${sampleSize} — probabilidade limitada a ${lowSampleHardCap.toFixed(2)} por segurança`;
   } else if (lowSampleHardCap !== null) {
-    lowSampleNote = `sample_size=${form.sample_size} — prob abaixo do hard-cap, mantida`;
+    lowSampleNote = `sample_size=${sampleSize} — prob abaixo do hard-cap, mantida`;
   }
 
   // Confidence = data_quality × (1 - |delta_matchup|*2)
@@ -219,6 +314,47 @@ export function calculatePlayerActionProbability(
     clamp(dq * (1 - Math.min(0.5, Math.abs(mAdj.delta) * 2)), 0, 1),
     4
   );
+
+  // Hit rate na linha (ex.: para line=2.5 → % jogos com ≥ 3)
+  const hitRate = hitRateAtLineFromSeries(series, line);
+
+  // Edge contra odd de mercado (se conhecida)
+  const edge =
+    oddMarket != null && oddMarket > 1
+      ? roundDecimal(finalProb * oddMarket - 1, 4)
+      : null;
+
+  const recommendation = recommend({
+    sample_size: sampleSize,
+    probability: finalProb,
+    data_quality: dq,
+    hit_rate: hitRate,
+    edge,
+  });
+
+  // Origem do dado: db quando temos histórico real; contextual quando 0.
+  const dataOrigin: DataOrigin = sampleSize > 0 ? "db" : "contextual";
+
+  // Racional curto e legível (humano lê)
+  const rationaleParts: string[] = [];
+  if (series && series.values_last_5.length > 0) {
+    rationaleParts.push(
+      `últimos ${series.values_last_5.length}: [${series.values_last_5.join(", ")}], média ${series.avg_value}`
+    );
+  } else {
+    rationaleParts.push(`sem histórico (sample=${sampleSize})`);
+  }
+  if (mAdj.delta !== 0) {
+    rationaleParts.push(
+      `matchup ${mAdj.delta > 0 ? "+" : ""}${(mAdj.delta * 100).toFixed(0)}pp (${mAdj.reason})`
+    );
+  }
+  if (edge != null) {
+    rationaleParts.push(
+      `edge vs odd ${oddMarket}: ${edge >= 0 ? "+" : ""}${(edge * 100).toFixed(1)}%`
+    );
+  }
+  const rationale = rationaleParts.join(" · ");
 
   return {
     fixture_id: input.fixtureId,
@@ -247,17 +383,27 @@ export function calculatePlayerActionProbability(
       matchup_reason: mAdj.reason,
       minutes_factor: minAdj.factor,
       minutes_reason: minAdj.reason,
-      sample_size: form.sample_size,
+      sample_size: sampleSize,
+      hit_rate: hitRate,
+      avg_value: series?.avg_value ?? null,
+      values_last_5: series?.values_last_5 ?? [],
       limitations: [
         ...(lowSampleNote ? [lowSampleNote] : []),
-        ...(form.sample_size < 4
-          ? [`sample_size=${form.sample_size} < 4 — confiança limitada`]
-          : []),
-        ...(["cross", "aerial_duel", "block", "offside"].includes(action)
-          ? ["dado granular ausente no schema 003 — placeholder"]
+        ...(sampleSize < 4
+          ? [`sample_size=${sampleSize} < 4 — confiança limitada`]
           : []),
       ],
     },
+    odd_market: oddMarket ?? null,
+    last5_values: series?.values_last_5 ?? [],
+    sample_size: sampleSize,
+    hit_rate: hitRate,
+    avg_value: series?.avg_value ?? null,
+    edge,
+    recommendation,
+    data_origin: dataOrigin,
+    line_label: lineLabelFor(action, line),
+    rationale,
   };
 }
 
