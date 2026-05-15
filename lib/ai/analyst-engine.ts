@@ -14,6 +14,7 @@ import {
 } from "./analyst-tools";
 import { getActiveProvider, type ProviderName } from "./providers";
 import { ANALYST_SYSTEM_PROMPT } from "./analyst-system-prompt";
+import { parseFreeBetText, type ParsedFreeBet } from "./bet-text-parser";
 
 export interface AnalystResponse {
   /** Texto que aparece como mensagem do assistente. */
@@ -173,25 +174,129 @@ async function handleBuildCombo(
   return lines.join("\n") + RESPONSIBILITY_FOOTER;
 }
 
+/**
+ * Cria draft a partir de texto livre tipo Bet365 (parser dedicado).
+ * Caminho preferido quando há legs explícitas no input.
+ */
+async function buildDraftFromFreeText(
+  parsed: ParsedFreeBet,
+  rawInput: string
+): Promise<DraftBetPayload> {
+  const homeAway = parsed.match_name?.split(" × ") ?? [];
+  const home = (homeAway[0] ?? "?").trim();
+  const away = (homeAway[1] ?? "?").trim();
+
+  // odd individual: distribui geometricamente quando temos só a combinada.
+  // Quando há 1 leg só, odd individual = combined.
+  const oddPerLeg =
+    parsed.legs.length > 0
+      ? Number(
+          Math.pow(parsed.combined_odd, 1 / parsed.legs.length).toFixed(2)
+        )
+      : parsed.combined_odd;
+
+  return {
+    match_name: parsed.match_name ?? "(jogo não identificado)",
+    total_stake: parsed.total_stake,
+    combined_odd: parsed.combined_odd,
+    potential_return: parsed.potential_return ?? null,
+    bookmaker: parsed.bookmaker,
+    source_type: "text",
+    source_text: rawInput,
+    // Sem mapeamento natural para tier; "intermediaria" é o default neutro
+    // do schema (não é segura nem mega).
+    tier: "intermediaria",
+    legs: parsed.legs.map((l) => ({
+      competition: "?",
+      home_team: home,
+      away_team: away,
+      market_type: l.market,
+      selection: l.player_name ?? l.market,
+      odd_value: oddPerLeg,
+      player_name: l.player_name,
+      line: l.line,
+    })),
+  };
+}
+
+/**
+ * Cria draft a partir de pick contextual publicada (caminho legacy
+ * quando o usuário não cola o texto da casa).
+ */
+function buildDraftFromPick(
+  pick: DailyPick,
+  stake: number
+): DraftBetPayload {
+  const tierMap: Record<DailyPick["risk"], DraftBetPayload["tier"]> = {
+    Segura: "segura",
+    Valor: "avancada",
+    Mega: "mega_sena",
+  };
+  const odd = pick.odd_target;
+  return {
+    match_name: pick.match,
+    total_stake: stake,
+    combined_odd: odd,
+    tier: tierMap[pick.risk],
+    pick_id: pick.id,
+    source_type: "pick",
+    legs: pick.markets.map((m) => ({
+      competition: pick.league,
+      home_team: pick.match.split(" × ")[0] ?? "?",
+      away_team: pick.match.split(" × ")[1] ?? "?",
+      market_type: m.market,
+      selection: m.player,
+      odd_value: Number(Math.pow(odd, 1 / pick.markets.length).toFixed(2)),
+      player_name: m.player,
+    })),
+  };
+}
+
 async function handleSaveBet(
   userId: string,
   sessionId: string,
   intent: ParsedIntent
 ): Promise<{ text: string; pending_action: PendingActionRow }> {
-  const picks = await getTodayPicks(userId);
-  const pick = findBestPickForHint(picks, intent.matchHint);
-  const stake = intent.amount;
+  // 1) Tenta primeiro o parser livre (texto colado da casa).
+  const free = parseFreeBetText(intent.raw);
 
-  if (!stake) {
-    throw new Error(
-      "Para salvar uma aposta preciso do valor. Ex.: \"salva essa aposta com R$ 50\"."
-    );
-  }
-  if (!pick) {
-    throw new Error("Não tenho pick contextual para salvar. Diga qual jogo.");
+  let draft: DraftBetPayload;
+  let label: string;
+  let oddCombined: number;
+  let stake: number;
+  let returnSource: "casa" | "calculado";
+
+  if (free) {
+    draft = await buildDraftFromFreeText(free, intent.raw);
+    label =
+      free.match_name ??
+      (free.bookmaker ? `aposta na ${free.bookmaker}` : "aposta livre");
+    oddCombined = free.combined_odd;
+    stake = free.total_stake;
+    returnSource = free.potential_return != null ? "casa" : "calculado";
+  } else {
+    // 2) Fallback: caminho antigo de pick contextual.
+    const picks = await getTodayPicks(userId);
+    const pick = findBestPickForHint(picks, intent.matchHint);
+    const intentStake = intent.amount;
+    if (!intentStake) {
+      throw new Error(
+        "Para salvar uma aposta preciso do valor. Ex.: \"salva essa aposta com R$ 50\" — ou cole o texto inteiro da Bet365 (jogo, odd, stake e seleções)."
+      );
+    }
+    if (!pick) {
+      throw new Error(
+        "Não consegui identificar o jogo. Cole o texto inteiro da casa (jogo, odd, stake e lista de seleções) ou diga qual pick publicada."
+      );
+    }
+    draft = buildDraftFromPick(pick, intentStake);
+    label = `${pick.match} (${pick.risk})`;
+    oddCombined = pick.odd_target;
+    stake = intentStake;
+    returnSource = "calculado";
   }
 
-  // Validação contra banca
+  // Validação contra banca (em ambos os caminhos).
   const bankroll = await getUserBankroll(userId);
   const warnings: string[] = [];
   if (bankroll) {
@@ -214,37 +319,36 @@ async function handleSaveBet(
     }
   }
 
-  // Tier alinhado ao schema (segura/intermediaria/avancada/mega_sena)
-  const tierMap: Record<DailyPick["risk"], DraftBetPayload["tier"]> = {
-    Segura: "segura",
-    Valor: "avancada",
-    Mega: "mega_sena",
-  };
-  const odd = pick.odd_target;
-  const draft: DraftBetPayload = {
-    match_name: pick.match,
-    total_stake: stake,
-    combined_odd: odd,
-    tier: tierMap[pick.risk],
-    legs: pick.markets.map((m) => ({
-      competition: pick.league,
-      home_team: pick.match.split(" × ")[0] ?? "?",
-      away_team: pick.match.split(" × ")[1] ?? "?",
-      market_type: m.market,
-      selection: m.player,
-      // Sem odd individual confiável; distribui geometricamente.
-      odd_value: Number(Math.pow(odd, 1 / pick.markets.length).toFixed(2)),
-    })),
-  };
   const action = await createBetDraft(userId, sessionId, draft);
 
+  const potentialReturn =
+    draft.potential_return != null ? draft.potential_return : stake * oddCombined;
+  const profit = potentialReturn - stake;
+  const balanceAfter =
+    bankroll != null ? bankroll.current_balance - stake : null;
+
   const lines: string[] = [];
-  lines.push(`Vou registrar essa aposta? **${pick.match}** (${pick.risk})`);
-  lines.push("");
+  lines.push(`Vou registrar essa aposta? **${label}**`);
+  if (free?.bookmaker) lines.push(`- Casa: **${free.bookmaker}**`);
   lines.push(`- Stake: ${fmtBRL(stake)}`);
-  lines.push(`- Odd combinada: ${odd.toFixed(2)}`);
-  lines.push(`- Retorno potencial: ${fmtBRL(stake * odd)}`);
-  lines.push(`- Lucro líquido se ganhar: ${fmtBRL(stake * odd - stake)}`);
+  lines.push(`- Odd combinada: ${oddCombined.toFixed(2)}`);
+  lines.push(
+    `- Retorno potencial: ${fmtBRL(potentialReturn)}` +
+      (returnSource === "casa" ? " (informado pela casa)" : "")
+  );
+  lines.push(`- Lucro líquido se ganhar: ${fmtBRL(profit)}`);
+  if (free && free.legs.length > 0) {
+    lines.push(`- Seleções (${free.legs.length}):`);
+    for (const l of free.legs) {
+      const who = l.player_name ? `${l.player_name} — ` : "";
+      lines.push(`   • ${who}${l.market}`);
+    }
+  }
+  if (balanceAfter != null) {
+    lines.push(
+      `- Saldo após o stake: ${fmtBRL(balanceAfter)} (de ${fmtBRL(bankroll!.current_balance)})`
+    );
+  }
   if (warnings.length) {
     lines.push("");
     lines.push(...warnings);

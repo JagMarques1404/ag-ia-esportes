@@ -30,6 +30,8 @@ interface Message {
   pending_action?: PendingAction;
   action_resolved?: "confirmed" | "cancelled" | "failed";
   action_message?: string;
+  /** Quando o pending_action virou bet (confirmado), guarda o id para link. */
+  action_bet_id?: string;
 }
 
 const STARTER_TIPS = [
@@ -160,6 +162,7 @@ export default function AnalystPage() {
         ok: boolean;
         status: string;
         message: string;
+        result?: { bet_id?: string } | null;
       };
       const resolved: Message["action_resolved"] =
         decision === "cancel"
@@ -167,6 +170,10 @@ export default function AnalystPage() {
           : data.ok
             ? "confirmed"
             : "failed";
+      const betId =
+        data.result && typeof data.result.bet_id === "string"
+          ? data.result.bet_id
+          : undefined;
       setMessages((m) =>
         m.map((x) =>
           x.id === msgId
@@ -174,6 +181,7 @@ export default function AnalystPage() {
                 ...x,
                 action_resolved: resolved,
                 action_message: data.message,
+                action_bet_id: betId,
               }
             : x
         )
@@ -263,6 +271,7 @@ export default function AnalystPage() {
                       action={m.pending_action}
                       resolved={m.action_resolved}
                       message={m.action_message}
+                      betId={m.action_bet_id}
                       busy={actingId === m.pending_action.id}
                       onConfirm={() =>
                         resolveAction(m.id, m.pending_action!.id, "confirm")
@@ -336,15 +345,128 @@ export default function AnalystPage() {
 // Subcomponentes
 // ============================================================
 
+interface BetLegPayload {
+  competition?: string;
+  home_team?: string;
+  away_team?: string;
+  market_type?: string;
+  selection?: string;
+  odd_value?: number;
+  player_name?: string | null;
+  line?: number | null;
+}
+
+interface BetPayload {
+  match_name?: string;
+  total_stake?: number;
+  combined_odd?: number;
+  potential_return?: number | null;
+  bookmaker?: string | null;
+  source_type?: string;
+  tier?: string;
+  legs?: BetLegPayload[];
+}
+
+function fmtBRL(n: number): string {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(n);
+}
+
+function BetPreview({ payload }: { payload: BetPayload }) {
+  const stake = Number(payload.total_stake) || 0;
+  const odd = Number(payload.combined_odd) || 0;
+  const declared = payload.potential_return;
+  const potentialReturn =
+    declared != null && declared > 0 ? Number(declared) : stake * odd;
+  const profit = potentialReturn - stake;
+  const legs = payload.legs ?? [];
+  return (
+    <div className="space-y-2 rounded-md border border-border/40 bg-background/40 p-3 text-xs">
+      <div className="grid grid-cols-2 gap-2">
+        {payload.bookmaker && (
+          <Field label="Casa" value={payload.bookmaker} />
+        )}
+        {payload.match_name && (
+          <Field label="Jogo" value={payload.match_name} />
+        )}
+        <Field label="Stake" value={fmtBRL(stake)} />
+        <Field label="Odd combinada" value={odd.toFixed(2)} />
+        <Field
+          label="Retorno potencial"
+          value={fmtBRL(potentialReturn)}
+          highlight="text-green-400"
+        />
+        <Field
+          label="Lucro líquido"
+          value={fmtBRL(profit)}
+          highlight={profit >= 0 ? "text-green-400" : "text-destructive"}
+        />
+      </div>
+      {legs.length > 0 && (
+        <div>
+          <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+            Seleções ({legs.length})
+          </div>
+          <ul className="space-y-1">
+            {legs.map((l, i) => {
+              const who = l.player_name ?? l.selection ?? "?";
+              const market = l.market_type ?? "?";
+              return (
+                <li key={i} className="leading-snug">
+                  <span className="font-medium">{who}</span>
+                  <span className="mx-1 text-muted-foreground">—</span>
+                  <span>{market}</span>
+                  {l.odd_value != null && (
+                    <span className="ml-1 text-muted-foreground">
+                      @ {Number(l.odd_value).toFixed(2)}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      {payload.source_type && payload.source_type !== "ai" && (
+        <div className="text-[10px] text-muted-foreground">
+          origem: {payload.source_type}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  highlight?: string;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className={`text-xs font-medium ${highlight ?? ""}`}>{value}</div>
+    </div>
+  );
+}
+
 function PendingActionCard(props: {
   action: PendingAction;
   resolved?: "confirmed" | "cancelled" | "failed";
   message?: string;
+  betId?: string;
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  const { action, resolved, message, busy, onConfirm, onCancel } = props;
+  const { action, resolved, message, betId, busy, onConfirm, onCancel } = props;
   if (resolved) {
     const cls =
       resolved === "confirmed"
@@ -360,6 +482,16 @@ function PendingActionCard(props: {
           {resolved === "failed" && "✗ Falha ao executar"}
         </div>
         {message && <div className="mt-1 opacity-80">{message}</div>}
+        {resolved === "confirmed" && betId && (
+          <div className="mt-2">
+            <Link
+              href={`/bets/${betId}`}
+              className="inline-flex items-center gap-1 rounded-md border border-green-500/40 bg-green-500/10 px-2 py-1 text-[11px] font-medium text-green-300 hover:bg-green-500/20"
+            >
+              Abrir aposta →
+            </Link>
+          </div>
+        )}
       </div>
     );
   }
@@ -369,6 +501,7 @@ function PendingActionCard(props: {
       : action.action_type === "create_reminder"
         ? "Criar lembrete?"
         : `Confirmar ${action.action_type}?`;
+  const isBet = action.action_type === "create_bet";
   return (
     <Card className="mt-3 border-primary/40 bg-primary/5">
       <CardContent className="space-y-3 py-3">
@@ -376,6 +509,7 @@ function PendingActionCard(props: {
           <AlertTriangleIcon className="h-4 w-4 text-primary" />
           {label}
         </div>
+        {isBet && <BetPreview payload={action.payload as BetPayload} />}
         <div className="flex gap-2">
           <Button
             size="sm"

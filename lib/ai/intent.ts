@@ -94,15 +94,22 @@ export function parseIntent(rawText: string): ParsedIntent {
     };
   }
 
-  // 2) Salvar/registrar aposta — precisa de menção a "aposta"/"salva"/"registra"
-  // junto com algum valor (ou apenas o verbo de gravar)
-  if (
-    /\b(salva|salvar|registra|registrar|grava|gravar)\b.*\b(aposta|com|R\$|reais)/.test(
-      t
-    ) ||
+  // 2) Salvar/registrar aposta — duas formas:
+  //    (a) verbo explícito "salva"/"registra"/"grava" + algum sinal
+  //    (b) texto colado da casa: stake + odd + linhas começando com "-"
+  //        (sem verbo, mas claramente um print de aposta)
+  const hasSaveVerb =
+    /\b(salva|salvar|registra|registrar|grava|gravar)\b.*\b(aposta|com|R\$|reais)/.test(t) ||
     /\b(salva|salvar|registra|registrar)\b.*\bcom\s*\d/.test(t) ||
-    (/\bregistra\b|\bsalva\b/.test(t) && amount !== undefined)
-  ) {
+    (/\bregistra\b|\bsalva\b/.test(t) && amount !== undefined);
+
+  // Heurística "texto colado": tem rótulo de stake + odd + ≥ 1 linha com "- "
+  const hasStakeLabel = /\b(stake|valor)\b\s*[:\-]/i.test(raw);
+  const hasOddLabel = /\bodd\b\s*(?:total|combinada)?\s*[:\-]?\s*\d/i.test(raw);
+  const hasBulletLeg = /^\s*[\-•*]\s+\S/m.test(raw);
+  const looksLikeBetPrint = hasStakeLabel && hasOddLabel && hasBulletLeg;
+
+  if (hasSaveVerb || looksLikeBetPrint) {
     return {
       type: "save_bet",
       raw,
