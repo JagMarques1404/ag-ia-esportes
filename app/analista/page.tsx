@@ -20,6 +20,9 @@ interface PendingAction {
   payload: Record<string, unknown>;
 }
 
+type ChatMode = "real" | "fallback";
+type ChatProvider = "anthropic" | "openai" | "fallback";
+
 interface Message {
   id: string;
   role: "user" | "assistant";
@@ -55,6 +58,9 @@ export default function AnalystPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [actingId, setActingId] = useState<string | null>(null);
+  const [mode, setMode] = useState<ChatMode | null>(null);
+  const [provider, setProvider] = useState<ChatProvider | null>(null);
+  const [fallbackReason, setFallbackReason] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -91,8 +97,14 @@ export default function AnalystPage() {
         session_id: string;
         assistant_text: string;
         pending_action: PendingAction | null;
+        mode?: ChatMode;
+        provider?: ChatProvider;
+        fallback_reason?: string | null;
       };
       setSessionId(data.session_id);
+      if (data.mode) setMode(data.mode);
+      if (data.provider) setProvider(data.provider);
+      setFallbackReason(data.fallback_reason ?? null);
       setMessages((m) => [
         ...m,
         {
@@ -188,10 +200,41 @@ export default function AnalystPage() {
     <div className="min-h-screen bg-background">
       <Navbar />
       <main className="container max-w-3xl py-6">
-        <div className="mb-4 flex items-center gap-2">
-          <SparklesIcon className="h-5 w-5 text-primary" />
-          <h1 className="text-xl font-semibold">Analista IA</h1>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <SparklesIcon className="h-5 w-5 text-primary" />
+            <h1 className="text-xl font-semibold">Analista IA</h1>
+            <span className="ml-1 inline-flex items-center rounded-full border border-border/60 bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              beta
+            </span>
+          </div>
+          {mode && (
+            <span
+              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${
+                mode === "real"
+                  ? "border-primary/50 bg-primary/10 text-primary"
+                  : "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
+              }`}
+            >
+              {mode === "real"
+                ? `IA real ativa · ${provider ?? "anthropic"}`
+                : "Modo fallback ativo"}
+            </span>
+          )}
         </div>
+
+        {mode === "fallback" && fallbackReason && (
+          <div className="mb-3 rounded-md border border-yellow-500/30 bg-yellow-500/5 p-3 text-xs text-yellow-300">
+            <strong>Modo fallback ativo:</strong> respostas por regras
+            determinísticas, IA real não respondeu.
+            <span className="ml-1 text-yellow-300/70">({fallbackReason})</span>
+          </div>
+        )}
+        {mode === null && (
+          <div className="mb-3 rounded-md border border-border/40 bg-muted/40 p-3 text-xs text-muted-foreground">
+            Envie uma pergunta para descobrir se a IA real está ativa.
+          </div>
+        )}
 
         <Card className="flex h-[70vh] flex-col">
           <div

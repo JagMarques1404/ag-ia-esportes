@@ -46,6 +46,9 @@ export async function POST(request: NextRequest) {
       assistant_text: result.text,
       pending_action: result.pending_action ?? null,
       intent: result.intent.type,
+      mode: result.mode,
+      provider: result.provider,
+      fallback_reason: result.fallback_reason ?? null,
     });
   } catch (err) {
     return errorResponse(

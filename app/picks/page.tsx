@@ -135,6 +135,10 @@ export default async function PicksPage() {
             Cards mostrados como prévia da experiência. A análise completa, mercados detalhados
             e o histórico ficam disponíveis no Beta Fundador.
           </p>
+          <div className="mx-auto mt-5 inline-block rounded-md border border-yellow-500/40 bg-yellow-500/5 px-3 py-1.5 text-xs text-yellow-300">
+            <strong>Preview mock</strong> — picks reais por data entram a partir da Fase 5.4B
+            (publicação por banco). Sem sample histórico automatizado ainda.
+          </div>
         </div>
       </section>
 

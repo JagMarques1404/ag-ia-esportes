@@ -5,10 +5,20 @@ import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Home, PlusCircle, History, Settings, LogOut } from "lucide-react";
+import {
+  Home,
+  PlusCircle,
+  History,
+  Settings,
+  LogOut,
+  SparklesIcon,
+  TargetIcon,
+} from "lucide-react";
 
 const links = [
   { href: "/dashboard", label: "Dashboard", icon: Home },
+  { href: "/picks", label: "Picks", icon: TargetIcon },
+  { href: "/analista", label: "Analista IA", icon: SparklesIcon },
   { href: "/bets/new", label: "Nova Aposta", icon: PlusCircle },
   { href: "/history", label: "Histórico", icon: History },
   { href: "/settings", label: "Config", icon: Settings },

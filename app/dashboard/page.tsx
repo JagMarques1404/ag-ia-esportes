@@ -211,6 +211,9 @@ export default async function DashboardPage() {
               <p className="text-sm text-muted-foreground">
                 Entradas sugeridas com base em leitura estatística, contexto do jogo e gestão de risco.
               </p>
+              <p className="mt-1 text-[11px] text-yellow-400/80">
+                Preview mock — picks reais por data ainda não publicadas (Fase 5.4B).
+              </p>
             </div>
             <div className="hidden sm:flex gap-2">
               <Button asChild size="sm" variant="outline">

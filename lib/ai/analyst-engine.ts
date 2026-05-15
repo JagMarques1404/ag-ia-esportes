@@ -12,6 +12,8 @@ import {
   type DraftBetPayload,
   type PendingActionRow,
 } from "./analyst-tools";
+import { getActiveProvider, type ProviderName } from "./providers";
+import { ANALYST_SYSTEM_PROMPT } from "./analyst-system-prompt";
 
 export interface AnalystResponse {
   /** Texto que aparece como mensagem do assistente. */
@@ -20,6 +22,12 @@ export interface AnalystResponse {
   pending_action?: PendingActionRow;
   /** Intent detectada — útil pra UI/telemetria. */
   intent: ParsedIntent;
+  /** Modo da resposta: 'real' = LLM externo respondeu; 'fallback' = handler determinístico. */
+  mode: "real" | "fallback";
+  /** Provider que de fato respondeu. */
+  provider: "anthropic" | "openai" | "fallback";
+  /** Razão do fallback quando o provider real falhou (ou não está configurado). */
+  fallback_reason?: string;
 }
 
 const RESPONSIBILITY_FOOTER =
@@ -349,15 +357,20 @@ function handleFallback(): string {
 // Entrypoint
 // ============================================================
 
-export async function runAnalyst(args: {
+// ============================================================
+// Determinístico (fallback) — pipeline original
+// ============================================================
+
+async function runDeterministic(args: {
   userId: string;
   sessionId: string;
   userMessage: string;
-}): Promise<AnalystResponse> {
+}): Promise<{
+  text: string;
+  pending_action?: PendingActionRow;
+  intent: ParsedIntent;
+}> {
   const { userId, sessionId, userMessage } = args;
-
-  await logMessage({ sessionId, userId, role: "user", content: userMessage });
-
   const intent = parseIntent(userMessage);
   let text = "";
   let pending_action: PendingActionRow | undefined;
@@ -397,16 +410,196 @@ export async function runAnalyst(args: {
       RESPONSIBILITY_FOOTER;
   }
 
+  return { text, pending_action, intent };
+}
+
+// ============================================================
+// Real (Anthropic) — usa o handler determinístico para WRITES
+// (criar pending action) e LLM apenas para o texto natural.
+// ============================================================
+
+async function fetchSessionHistory(
+  sessionId: string,
+  limit = 10
+): Promise<Array<{ role: "user" | "assistant"; content: string }>> {
+  const supabase = getSupabaseAdmin();
+  const { data } = await supabase
+    .from("ai_chat_messages")
+    .select("role, content")
+    .eq("session_id", sessionId)
+    .in("role", ["user", "assistant"])
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  return ((data ?? []) as Array<{ role: string; content: string }>).map((m) => ({
+    role: m.role === "user" ? "user" : "assistant",
+    content: String(m.content ?? ""),
+  }));
+}
+
+async function buildUserContext(userId: string) {
+  const [bankroll, openBets, recent] = await Promise.all([
+    getUserBankroll(userId).catch(() => null),
+    getOpenBets(userId).catch(() => []),
+    getRecentBetHistory(userId, 5).catch(() => []),
+  ]);
+  return {
+    bankroll,
+    open_bets: openBets,
+    recent_history: recent,
+    today_picks: getTodayPicks(userId),
+  };
+}
+
+interface RealRunResult {
+  text: string;
+  provider: ProviderName;
+  fallback_reason?: string;
+}
+
+async function runWithAnthropic(args: {
+  userId: string;
+  sessionId: string;
+  userMessage: string;
+  pendingAction?: PendingActionRow;
+  intent: ParsedIntent;
+  model: string;
+}): Promise<RealRunResult> {
+  const { userId, sessionId, userMessage, pendingAction, intent, model } = args;
+  // Import dinâmico para evitar carregar o SDK em rotas que não usam IA
+  const { default: Anthropic } = await import("@anthropic-ai/sdk");
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return { text: "", provider: "fallback", fallback_reason: "missing key" };
+  }
+  const client = new Anthropic({ apiKey });
+
+  const context = await buildUserContext(userId);
+  const history = await fetchSessionHistory(sessionId, 10);
+
+  const contextBlock =
+    "USER_CONTEXT (json):\n```json\n" +
+    JSON.stringify(
+      {
+        intent: intent.type,
+        pending_action: pendingAction
+          ? {
+              id: pendingAction.id,
+              action_type: pendingAction.action_type,
+              payload: pendingAction.payload,
+            }
+          : null,
+        ...context,
+      },
+      null,
+      2
+    ) +
+    "\n```";
+
+  // Mensagens: histórico (user/assistant) + a do usuário atual (já está
+  // no histórico se logMessage foi chamado antes — então só usamos ela)
+  const messages = history.length > 0 ? history : [
+    { role: "user" as const, content: userMessage },
+  ];
+
+  const completion = await client.messages.create({
+    model,
+    max_tokens: 800,
+    system: [
+      { type: "text" as const, text: ANALYST_SYSTEM_PROMPT },
+      { type: "text" as const, text: contextBlock },
+    ],
+    messages,
+  });
+
+  const text = completion.content
+    .map((b) => (b.type === "text" ? b.text : ""))
+    .filter((s) => s.length > 0)
+    .join("\n")
+    .trim();
+
+  if (!text) {
+    return {
+      text: "",
+      provider: "fallback",
+      fallback_reason: "empty response",
+    };
+  }
+  return { text, provider: "anthropic" };
+}
+
+// ============================================================
+// Entrypoint
+// ============================================================
+
+export async function runAnalyst(args: {
+  userId: string;
+  sessionId: string;
+  userMessage: string;
+}): Promise<AnalystResponse> {
+  const { userId, sessionId, userMessage } = args;
+
+  await logMessage({ sessionId, userId, role: "user", content: userMessage });
+
+  // 1) Sempre roda o pipeline determinístico — ele cuida das escritas
+  // (pending actions) e dá um fallback robusto se a IA real falhar.
+  const det = await runDeterministic({ userId, sessionId, userMessage });
+
+  // 2) Se há provider real, tenta gerar texto natural por cima.
+  const provider = getActiveProvider();
+  let mode: "real" | "fallback" = "fallback";
+  let providerName: AnalystResponse["provider"] = "fallback";
+  let fallbackReason: string | undefined;
+  let finalText = det.text;
+
+  if (provider.name === "anthropic" && provider.model) {
+    try {
+      const realRes = await runWithAnthropic({
+        userId,
+        sessionId,
+        userMessage,
+        pendingAction: det.pending_action,
+        intent: det.intent,
+        model: provider.model,
+      });
+      if (realRes.provider === "anthropic" && realRes.text) {
+        finalText = realRes.text;
+        mode = "real";
+        providerName = "anthropic";
+      } else {
+        fallbackReason = realRes.fallback_reason ?? "unknown";
+      }
+    } catch (err) {
+      fallbackReason =
+        err instanceof Error ? err.message.slice(0, 200) : "anthropic error";
+      // Não logar a chave; SDK não a inclui em err.message por default.
+      console.warn("[analyst] anthropic falhou, caindo para fallback:", fallbackReason);
+    }
+  } else if (provider.name === "openai") {
+    fallbackReason = "openai provider stub — implementação pendente";
+  } else {
+    fallbackReason = "no provider configured (ANTHROPIC_API_KEY ausente)";
+  }
+
   await logMessage({
     sessionId,
     userId,
     role: "assistant",
-    content: text,
+    content: finalText,
     metadata: {
-      intent: intent.type,
-      pending_action_id: pending_action?.id ?? null,
+      intent: det.intent.type,
+      pending_action_id: det.pending_action?.id ?? null,
+      mode,
+      provider: providerName,
+      fallback_reason: fallbackReason ?? null,
     },
   });
 
-  return { text, pending_action, intent };
+  return {
+    text: finalText,
+    pending_action: det.pending_action,
+    intent: det.intent,
+    mode,
+    provider: providerName,
+    fallback_reason: fallbackReason,
+  };
 }
