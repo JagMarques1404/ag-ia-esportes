@@ -78,19 +78,36 @@ export interface DailyPick {
   result_notes?: string | null;
 }
 
+export interface DraftBetLeg {
+  competition: string;
+  home_team: string;
+  away_team: string;
+  market_type: string;
+  selection: string;
+  odd_value: number;
+  /** Nome do jogador isolado (ex.: "Ollie Watkins"). */
+  player_name?: string | null;
+  /** Linha numérica (ex.: 1.5 para "2+ chutes"). */
+  line?: number | null;
+  notes?: string | null;
+}
+
 export interface DraftBetPayload {
   match_name: string;
   total_stake: number;
   combined_odd: number;
   tier?: "segura" | "intermediaria" | "avancada" | "mega_sena";
-  legs?: Array<{
-    competition: string;
-    home_team: string;
-    away_team: string;
-    market_type: string;
-    selection: string;
-    odd_value: number;
-  }>;
+  legs?: DraftBetLeg[];
+  // Migration 012 — origem da aposta
+  source_type?: "manual" | "text" | "image" | "ai" | "pick";
+  source_text?: string | null;
+  source_image_url?: string | null;
+  bookmaker?: string | null;
+  /** Se conhecido: retorno potencial salvo pela casa (Bet365 mostra). */
+  potential_return?: number | null;
+  /** FK para public_picks quando a aposta nasceu de uma pick publicada. */
+  pick_id?: string | null;
+  notes?: string | null;
 }
 
 export interface DraftReminderPayload {
@@ -689,11 +706,15 @@ async function executeCreateBet(
     throw new Error("combined_odd inválido.");
   }
   const tier = draft.tier ?? "segura";
-  const potentialReturn = Math.round(stake * odd * 100) / 100;
+  const potentialReturn =
+    draft.potential_return != null && draft.potential_return > 0
+      ? Number(draft.potential_return)
+      : Math.round(stake * odd * 100) / 100;
   const legs = draft.legs ?? [];
   const betType = legs.length === 1 ? "single" : legs.length > 1 ? "multiple" : "single";
+  const sourceType = draft.source_type ?? "ai";
 
-  // Insere bet
+  // Insere bet — inclui colunas da migration 012 quando presentes.
   const { data: bet, error: betErr } = await supabase
     .from("bets")
     .insert({
@@ -705,7 +726,15 @@ async function executeCreateBet(
       potential_return: potentialReturn,
       status: "open",
       followed_framework: true,
-      notes: `Aposta criada via Analista IA — ${draft.match_name}`,
+      bookmaker: draft.bookmaker ?? null,
+      notes:
+        draft.notes ??
+        `Aposta criada via Analista IA — ${draft.match_name}`,
+      source_type: sourceType,
+      source_text: draft.source_text ?? null,
+      source_image_url: draft.source_image_url ?? null,
+      match_name: draft.match_name,
+      pick_id: draft.pick_id ?? null,
     })
     .select("id")
     .single();
@@ -722,12 +751,16 @@ async function executeCreateBet(
       selection: l.selection,
       odd_value: l.odd_value,
       position: i + 1,
+      // Migration 012
+      player_name: l.player_name ?? null,
+      line: l.line ?? null,
+      notes: l.notes ?? null,
     }));
     const { error: legsErr } = await supabase.from("bet_legs").insert(legRows);
     if (legsErr) throw new Error(`bet_legs insert: ${legsErr.message}`);
   }
 
-  // Atualiza bankroll + log
+  // Atualiza bankroll + log (debita stake; bet_placed = -stake)
   const { data: br } = await supabase
     .from("bankroll")
     .select("current_balance, total_staked")
@@ -749,7 +782,7 @@ async function executeCreateBet(
       amount: -stake,
       balance_after: newBalance,
       reference_id: bet.id,
-      description: `Aposta via Analista IA — ${draft.match_name}`,
+      description: `Stake aposta: ${draft.match_name}${draft.bookmaker ? ` (${draft.bookmaker})` : ""}`,
     });
   }
 
