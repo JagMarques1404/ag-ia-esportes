@@ -231,6 +231,101 @@ function findReturn(text: string): number | null {
 // Entrypoint
 // ============================================================
 
+// ============================================================
+// Update parser — "corrige a aposta para stake X, odd Y, retorno Z"
+// ============================================================
+
+export interface ParsedBetUpdate {
+  /** Prefixo de bet_id mencionado pelo usuário, se houver. */
+  bet_id_prefix: string | null;
+  total_stake: number | null;
+  combined_odd: number | null;
+  potential_return: number | null;
+  /** Quantos campos foram extraídos (1..3). */
+  field_count: number;
+}
+
+const RE_BET_ID_PREFIX = /\b([0-9a-f]{6,8})\b/i;
+// "stake (correto|certo)? (é|de|foi)? R$X" / "entrada (de|foi)? X"
+const RE_STAKE_LOOSE =
+  /\b(?:stake|entrada|valor)\s*(?:correto|certo|certa)?\s*(?:[ée]|de|foi|para)?\s*R?\$?\s*(\d{1,6}(?:[.,]\d{1,2})?)/i;
+// "retorno (possível|certo)? (é|de|foi)? R$X"
+const RE_RETURN_LOOSE =
+  /\b(?:retorno|payout)(?:\s+(?:potencial|poss[ií]vel|certo|certa))?\s*(?:[ée]|de|foi|para)?\s*R?\$?\s*(\d{1,6}(?:[.,]\d{1,2})?)/i;
+// "odd (correta|certa)? (é|de|foi)? X"
+const RE_ODD_LOOSE =
+  /\bodd\s*(?:total|combinada|correta|certa)?\s*(?:[ée]|de|foi|para)?\s*[:\-]?\s*(\d{1,2}[.,]\d{1,2})\b/i;
+
+/**
+ * Detecta intenção de correção quando o texto tem verbo de correção +
+ * algum dos campos (stake/odd/retorno).
+ *
+ * Retorna null se o texto não parece pedido de correção.
+ */
+export function parseFreeBetUpdate(input: string): ParsedBetUpdate | null {
+  if (!input || input.length < 5) return null;
+  const text = input.trim();
+  const lower = text.toLowerCase();
+
+  // Verbo de correção OU forma "stake/odd/retorno (é|foi) X"
+  const hasCorrectionVerb =
+    /\b(corrig[eai]|corre[cç][aã]o|atualiz[aoe]|ajust[aoe]|errad[oa]|correto|certa?)\b/.test(
+      lower
+    );
+  const stakeMatch = RE_STAKE_LOOSE.exec(text);
+  const oddMatch = RE_ODD_LOOSE.exec(text);
+  const returnMatch = RE_RETURN_LOOSE.exec(text);
+
+  // Sem verbo E sem campos → não é update.
+  // Com verbo E sem campos → também não é (sem dado pra atualizar).
+  if (!stakeMatch && !oddMatch && !returnMatch) return null;
+  // Sem verbo, exige pelo menos 2 campos pra evitar falso positivo.
+  if (!hasCorrectionVerb) {
+    const fields = [stakeMatch, oddMatch, returnMatch].filter(Boolean).length;
+    if (fields < 2) return null;
+  }
+
+  const stake = stakeMatch ? parseBrlNumber(stakeMatch[1]) : null;
+  const odd = oddMatch ? parseBrlNumber(oddMatch[1]) : null;
+  const ret = returnMatch ? parseBrlNumber(returnMatch[1]) : null;
+
+  // Sanity: descarta valores absurdos
+  const stakeOk = stake != null && Number.isFinite(stake) && stake > 0;
+  const oddOk = odd != null && Number.isFinite(odd) && odd >= 1.01 && odd <= 1000;
+  const retOk = ret != null && Number.isFinite(ret) && ret >= 0;
+
+  let fieldCount = 0;
+  if (stakeOk) fieldCount++;
+  if (oddOk) fieldCount++;
+  if (retOk) fieldCount++;
+  if (fieldCount === 0) return null;
+
+  // bet_id prefix opcional — só se aparece um hex curto (8 chars típico)
+  // após "aposta" para evitar pegar números aleatórios.
+  let betPrefix: string | null = null;
+  const aroundAposta = /\baposta\s+([0-9a-f]{6,12})\b/i.exec(text);
+  if (aroundAposta) {
+    betPrefix = aroundAposta[1];
+  } else {
+    const generic = RE_BET_ID_PREFIX.exec(text);
+    if (generic && /^[0-9a-f]{8}$/i.test(generic[1])) {
+      betPrefix = generic[1];
+    }
+  }
+
+  return {
+    bet_id_prefix: betPrefix,
+    total_stake: stakeOk ? stake : null,
+    combined_odd: oddOk ? odd : null,
+    potential_return: retOk ? ret : null,
+    field_count: fieldCount,
+  };
+}
+
+// ============================================================
+// Free bet (criação)
+// ============================================================
+
 /**
  * Tenta extrair uma aposta a partir de texto livre. Retorna null se não
  * conseguir o mínimo (stake + odd + ≥ 1 leg). Caller deve usar o resultado

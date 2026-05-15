@@ -7,6 +7,7 @@ export type IntentType =
   | "explain_pick"
   | "build_combo"
   | "save_bet"
+  | "update_bet"
   | "save_reminder"
   | "bankroll_info"
   | "risk_advice"
@@ -94,7 +95,28 @@ export function parseIntent(rawText: string): ParsedIntent {
     };
   }
 
-  // 2) Salvar/registrar aposta — duas formas:
+  // 2a) UPDATE de aposta existente — verbo de correção + dado novo.
+  //     Tem prioridade sobre save_bet quando ambos casariam.
+  //     Ex.: "corrige a aposta para stake 188 e odd 1.95"
+  //          "a entrada foi de 188 reais e retorno 367"
+  const hasCorrectionVerb =
+    /\b(corrig[eai]|corre[cç][aã]o|atualiz[aoe]|ajust[aoe]|errad[oa]|correto|certa?)\b/.test(
+      t
+    );
+  const mentionsBet = /\baposta\b/.test(t);
+  const looksLikeUpdate =
+    (hasCorrectionVerb && (mentionsBet || /\b(stake|odd|retorno|entrada)\b/.test(t))) ||
+    // formas curtas sem verbo: "stake correto é X" / "odd certa é X"
+    /\b(stake|odd|retorno|entrada)\b\s+(?:correto|certo|certa)\b/.test(t);
+
+  // Não cair em update se o texto também tem bullet legs (claramente uma criação).
+  const hasBulletLegEarly = /^\s*[\-•*]\s+\S/m.test(raw);
+
+  if (looksLikeUpdate && !hasBulletLegEarly) {
+    return { type: "update_bet", raw, amount, oddTarget, matchHint };
+  }
+
+  // 2b) Salvar/registrar aposta nova — duas formas:
   //    (a) verbo explícito "salva"/"registra"/"grava" + algum sinal
   //    (b) texto colado da casa: stake + odd + linhas começando com "-"
   //        (sem verbo, mas claramente um print de aposta)
@@ -106,8 +128,7 @@ export function parseIntent(rawText: string): ParsedIntent {
   // Heurística "texto colado": tem rótulo de stake + odd + ≥ 1 linha com "- "
   const hasStakeLabel = /\b(stake|valor)\b\s*[:\-]/i.test(raw);
   const hasOddLabel = /\bodd\b\s*(?:total|combinada)?\s*[:\-]?\s*\d/i.test(raw);
-  const hasBulletLeg = /^\s*[\-•*]\s+\S/m.test(raw);
-  const looksLikeBetPrint = hasStakeLabel && hasOddLabel && hasBulletLeg;
+  const looksLikeBetPrint = hasStakeLabel && hasOddLabel && hasBulletLegEarly;
 
   if (hasSaveVerb || looksLikeBetPrint) {
     return {

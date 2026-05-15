@@ -186,8 +186,7 @@ export default function NewBetPage() {
         type: "bet_placed",
         amount: -stake,
         balance_after: newBalance,
-        reference_id: bet.id,
-        description: `Aposta registrada — ${betType} ${legs.length} perna(s)`,
+        description: `[bet:${bet.id}] Aposta registrada — ${betType} ${legs.length} perna(s)`,
       });
     }
 

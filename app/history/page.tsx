@@ -69,8 +69,7 @@ export default function HistoryPage() {
         type: status === "won" ? "bet_win" : status === "cashed_out" ? "cashout" : "bet_loss",
         amount: resultValue,
         balance_after: newBalance,
-        reference_id: bet.id,
-        description: `Aposta ${status} — ${bet.tier}`,
+        description: `[bet:${bet.id}] Aposta ${status} — ${bet.tier}`,
       });
     }
 

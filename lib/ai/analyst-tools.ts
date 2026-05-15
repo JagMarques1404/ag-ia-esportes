@@ -118,6 +118,23 @@ export interface DraftReminderPayload {
   message: string;
 }
 
+export interface DraftBetUpdatePayload {
+  bet_id: string;
+  // Snapshot do estado atual — registrado no draft pra UI mostrar antes/depois
+  // mesmo se o bet for editado em paralelo. Executor relê do banco.
+  old_stake: number;
+  old_odd: number;
+  old_potential_return: number;
+  // Novos valores (qualquer um pode ser null = manter)
+  new_stake: number | null;
+  new_odd: number | null;
+  new_potential_return: number | null;
+  /** Diferença stake (new - old) — usado pra rebalancear bankroll. null se stake não mudou. */
+  stake_delta: number | null;
+  match_name: string;
+  reason?: string | null;
+}
+
 export interface PendingActionRow {
   id: string;
   user_id: string;
@@ -557,6 +574,76 @@ export async function createBetDraft(
   return data as PendingActionRow;
 }
 
+export async function createUpdateBetDraft(
+  userId: string,
+  sessionId: string | null,
+  payload: DraftBetUpdatePayload
+): Promise<PendingActionRow> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("ai_pending_actions")
+    .insert({
+      user_id: userId,
+      session_id: sessionId,
+      action_type: "update_bet",
+      payload,
+      status: "pending",
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(`createUpdateBetDraft: ${error.message}`);
+  return data as PendingActionRow;
+}
+
+/**
+ * Lookup helper: aposta open mais recente do usuário, ou aposta cujo
+ * id começa com `prefix` (8 chars típicos). Retorna null se nada bater.
+ */
+export async function findRecentOpenBet(
+  userId: string,
+  prefix: string | null = null
+): Promise<{
+  id: string;
+  total_stake: number;
+  combined_odd: number;
+  potential_return: number;
+  match_name: string | null;
+  bookmaker: string | null;
+  status: string;
+} | null> {
+  const supabase = getSupabaseAdmin();
+  let query = supabase
+    .from("bets")
+    .select(
+      "id, total_stake, combined_odd, potential_return, match_name, bookmaker, status, placed_at"
+    )
+    .eq("user_id", userId)
+    .eq("status", "open")
+    .order("placed_at", { ascending: false })
+    .limit(1);
+
+  if (prefix && prefix.length >= 6) {
+    // Match por prefixo de UUID (8 chars típicos do display)
+    query = query.like("id", `${prefix.toLowerCase()}%`);
+  }
+
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    console.warn(`[findRecentOpenBet] ${error.message}`);
+    return null;
+  }
+  if (!data) return null;
+  return {
+    id: data.id as string,
+    total_stake: Number(data.total_stake) || 0,
+    combined_odd: Number(data.combined_odd) || 0,
+    potential_return: Number(data.potential_return) || 0,
+    match_name: (data.match_name as string | null) ?? null,
+    bookmaker: (data.bookmaker as string | null) ?? null,
+    status: data.status as string,
+  };
+}
+
 export async function createReminderDraft(
   userId: string,
   sessionId: string | null,
@@ -627,6 +714,11 @@ export async function confirmPendingAction(
 
     if (row.action_type === "create_bet") {
       resultPayload = await executeCreateBet(userId, row.payload as DraftBetPayload);
+    } else if (row.action_type === "update_bet") {
+      resultPayload = await executeUpdateBet(
+        userId,
+        row.payload as DraftBetUpdatePayload
+      );
     } else if (row.action_type === "create_reminder") {
       // Sem tabela de reminders ainda — apenas marca como executed,
       // o payload fica para um job futuro consumir.
@@ -781,10 +873,108 @@ async function executeCreateBet(
       type: "bet_placed",
       amount: -stake,
       balance_after: newBalance,
-      reference_id: bet.id,
-      description: `Stake aposta: ${draft.match_name}${draft.bookmaker ? ` (${draft.bookmaker})` : ""}`,
+      // Schema real do bankroll_log não tem coluna bet_id/reference_id
+      // disponível em todos os ambientes — embute o ID na descrição.
+      description: `[bet:${bet.id}] Stake aposta: ${draft.match_name}${draft.bookmaker ? ` (${draft.bookmaker})` : ""}`,
     });
   }
 
   return { bet_id: bet.id };
+}
+
+// ============================================================
+// Executor de update_bet
+//   Atualiza stake/odd/potential_return e rebalanceia bankroll com a
+//   diferença de stake (se houver). Não duplica nada: se o pending já
+//   foi 'executed', confirmPendingAction nem chega aqui.
+// ============================================================
+
+async function executeUpdateBet(
+  userId: string,
+  draft: DraftBetUpdatePayload
+): Promise<{ bet_id: string; stake_delta: number }> {
+  const supabase = getSupabaseAdmin();
+
+  // Re-ler o estado atual (anti-race com edição manual concorrente).
+  const { data: current, error: cErr } = await supabase
+    .from("bets")
+    .select("id, total_stake, combined_odd, potential_return, status, match_name")
+    .eq("id", draft.bet_id)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (cErr) throw new Error(`update_bet (read): ${cErr.message}`);
+  if (!current) throw new Error("Aposta não encontrada ou não pertence a você.");
+  if (current.status !== "open") {
+    throw new Error(
+      `Aposta já está em status '${current.status}' — não pode mais ser corrigida via IA.`
+    );
+  }
+
+  const oldStake = Number(current.total_stake) || 0;
+  const oldOdd = Number(current.combined_odd) || 0;
+  const oldReturn = Number(current.potential_return) || 0;
+
+  const newStake = draft.new_stake != null ? Number(draft.new_stake) : oldStake;
+  const newOdd = draft.new_odd != null ? Number(draft.new_odd) : oldOdd;
+  // Se o caller passou retorno explícito, respeita. Senão recalcula.
+  const newReturn =
+    draft.new_potential_return != null
+      ? Number(draft.new_potential_return)
+      : Math.round(newStake * newOdd * 100) / 100;
+
+  if (!Number.isFinite(newStake) || newStake <= 0) {
+    throw new Error("new_stake inválido.");
+  }
+  if (!Number.isFinite(newOdd) || newOdd < 1.01) {
+    throw new Error("new_odd inválido.");
+  }
+
+  const stakeDelta = Number((newStake - oldStake).toFixed(2));
+
+  // 1. UPDATE bets
+  const { error: uErr } = await supabase
+    .from("bets")
+    .update({
+      total_stake: newStake,
+      combined_odd: newOdd,
+      potential_return: newReturn,
+      notes: draft.reason
+        ? `Correção via IA: ${draft.reason}`
+        : `Correção via IA — stake ${oldStake} → ${newStake}, odd ${oldOdd} → ${newOdd}, retorno ${oldReturn} → ${newReturn}`,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", draft.bet_id)
+    .eq("user_id", userId);
+  if (uErr) throw new Error(`update_bet (write): ${uErr.message}`);
+
+  // 2. Rebalanceia bankroll com a diferença de stake (se houver)
+  if (stakeDelta !== 0) {
+    const { data: br } = await supabase
+      .from("bankroll")
+      .select("current_balance, total_staked")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (br) {
+      const newBalance = Number((Number(br.current_balance) - stakeDelta).toFixed(2));
+      const newTotalStaked = Number(
+        (Number(br.total_staked) + stakeDelta).toFixed(2)
+      );
+      await supabase
+        .from("bankroll")
+        .update({
+          current_balance: newBalance,
+          total_staked: newTotalStaked,
+        })
+        .eq("user_id", userId);
+      await supabase.from("bankroll_log").insert({
+        user_id: userId,
+        type: "adjustment",
+        amount: -stakeDelta,
+        balance_after: newBalance,
+        description: `[bet:${draft.bet_id}] Correção de stake (${oldStake} → ${newStake})`,
+      });
+    }
+  }
+
+  return { bet_id: draft.bet_id, stake_delta: stakeDelta };
 }

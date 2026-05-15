@@ -367,6 +367,19 @@ interface BetPayload {
   legs?: BetLegPayload[];
 }
 
+interface UpdateBetPayload {
+  bet_id?: string;
+  match_name?: string;
+  old_stake?: number;
+  old_odd?: number;
+  old_potential_return?: number;
+  new_stake?: number | null;
+  new_odd?: number | null;
+  new_potential_return?: number | null;
+  stake_delta?: number | null;
+  reason?: string | null;
+}
+
 function fmtBRL(n: number): string {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -457,6 +470,81 @@ function Field({
   );
 }
 
+function UpdateBetPreview({ payload }: { payload: UpdateBetPayload }) {
+  const oldStake = Number(payload.old_stake) || 0;
+  const oldOdd = Number(payload.old_odd) || 0;
+  const oldReturn = Number(payload.old_potential_return) || 0;
+  const newStake =
+    payload.new_stake != null ? Number(payload.new_stake) : oldStake;
+  const newOdd = payload.new_odd != null ? Number(payload.new_odd) : oldOdd;
+  const newReturn =
+    payload.new_potential_return != null
+      ? Number(payload.new_potential_return)
+      : Number((newStake * newOdd).toFixed(2));
+  const delta = Number(payload.stake_delta ?? newStake - oldStake);
+  return (
+    <div className="space-y-2 rounded-md border border-border/40 bg-background/40 p-3 text-xs">
+      {payload.match_name && (
+        <Field label="Aposta" value={payload.match_name} />
+      )}
+      <div className="grid grid-cols-3 gap-2">
+        <DiffField
+          label="Stake"
+          oldText={fmtBRL(oldStake)}
+          newText={fmtBRL(newStake)}
+          changed={oldStake !== newStake}
+        />
+        <DiffField
+          label="Odd"
+          oldText={oldOdd.toFixed(2)}
+          newText={newOdd.toFixed(2)}
+          changed={oldOdd !== newOdd}
+        />
+        <DiffField
+          label="Retorno"
+          oldText={fmtBRL(oldReturn)}
+          newText={fmtBRL(newReturn)}
+          changed={oldReturn !== newReturn}
+        />
+      </div>
+      {delta !== 0 && (
+        <div className="rounded-md border border-yellow-500/30 bg-yellow-500/5 px-2 py-1 text-[11px] text-yellow-300">
+          Impacto na banca: {delta > 0 ? "−" : "+"}{fmtBRL(Math.abs(delta))}{" "}
+          {delta > 0 ? "(saída adicional)" : "(estorno parcial)"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiffField({
+  label,
+  oldText,
+  newText,
+  changed,
+}: {
+  label: string;
+  oldText: string;
+  newText: string;
+  changed: boolean;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      {changed ? (
+        <div className="text-xs">
+          <span className="text-muted-foreground line-through">{oldText}</span>{" "}
+          <span className="font-semibold text-primary">→ {newText}</span>
+        </div>
+      ) : (
+        <div className="text-xs font-medium">{newText}</div>
+      )}
+    </div>
+  );
+}
+
 function PendingActionCard(props: {
   action: PendingAction;
   resolved?: "confirmed" | "cancelled" | "failed";
@@ -498,10 +586,13 @@ function PendingActionCard(props: {
   const label =
     action.action_type === "create_bet"
       ? "Salvar aposta?"
-      : action.action_type === "create_reminder"
-        ? "Criar lembrete?"
-        : `Confirmar ${action.action_type}?`;
+      : action.action_type === "update_bet"
+        ? "Aplicar correção?"
+        : action.action_type === "create_reminder"
+          ? "Criar lembrete?"
+          : `Confirmar ${action.action_type}?`;
   const isBet = action.action_type === "create_bet";
+  const isUpdate = action.action_type === "update_bet";
   return (
     <Card className="mt-3 border-primary/40 bg-primary/5">
       <CardContent className="space-y-3 py-3">
@@ -510,6 +601,9 @@ function PendingActionCard(props: {
           {label}
         </div>
         {isBet && <BetPreview payload={action.payload as BetPayload} />}
+        {isUpdate && (
+          <UpdateBetPreview payload={action.payload as UpdateBetPayload} />
+        )}
         <div className="flex gap-2">
           <Button
             size="sm"

@@ -19,7 +19,8 @@
     "readiness:player-intel": "tsx scripts/player-intel-readiness.ts",
     "backfill:player-target": "tsx scripts/targeted-player-backfill.ts",
     "collect:player-last5": "tsx scripts/collect-target-fixture-player-last5.ts",
-    "test:player-action-board": "tsx scripts/test-player-action-board.ts"
+    "test:player-action-board": "tsx scripts/test-player-action-board.ts",
+    "test:bet-parser": "tsx scripts/test-bet-text-parser.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

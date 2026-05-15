@@ -4,17 +4,24 @@ import { parseIntent, type ParsedIntent } from "./intent";
 import {
   createBetDraft,
   createReminderDraft,
+  createUpdateBetDraft,
+  findRecentOpenBet,
   getOpenBets,
   getRecentBetHistory,
   getTodayPicks,
   getUserBankroll,
   type DailyPick,
   type DraftBetPayload,
+  type DraftBetUpdatePayload,
   type PendingActionRow,
 } from "./analyst-tools";
 import { getActiveProvider, type ProviderName } from "./providers";
 import { ANALYST_SYSTEM_PROMPT } from "./analyst-system-prompt";
-import { parseFreeBetText, type ParsedFreeBet } from "./bet-text-parser";
+import {
+  parseFreeBetText,
+  parseFreeBetUpdate,
+  type ParsedFreeBet,
+} from "./bet-text-parser";
 
 export interface AnalystResponse {
   /** Texto que aparece como mensagem do assistente. */
@@ -361,6 +368,128 @@ async function handleSaveBet(
   };
 }
 
+async function handleUpdateBet(
+  userId: string,
+  sessionId: string,
+  intent: ParsedIntent
+): Promise<{ text: string; pending_action: PendingActionRow }> {
+  const update = parseFreeBetUpdate(intent.raw);
+  if (!update) {
+    throw new Error(
+      "Não consegui entender a correção. Diga, por exemplo: \"corrige a aposta para stake 188, odd 1.95 e retorno 367.04\"."
+    );
+  }
+
+  // Localizar a aposta alvo
+  const bet = await findRecentOpenBet(userId, update.bet_id_prefix);
+  if (!bet) {
+    if (update.bet_id_prefix) {
+      throw new Error(
+        `Não encontrei aposta aberta começando com "${update.bet_id_prefix}". Confira o id ou diga apenas "corrige a última aposta".`
+      );
+    }
+    throw new Error(
+      "Não encontrei nenhuma aposta aberta sua para corrigir."
+    );
+  }
+
+  const newStake = update.total_stake;
+  const newOdd = update.combined_odd;
+  const newReturn = update.potential_return;
+
+  // Validações conservadoras
+  if (newStake != null && (!Number.isFinite(newStake) || newStake <= 0)) {
+    throw new Error(`Stake inválido: ${newStake}.`);
+  }
+  if (newOdd != null && (!Number.isFinite(newOdd) || newOdd < 1.01)) {
+    throw new Error(`Odd inválida: ${newOdd}.`);
+  }
+
+  const stakeDelta =
+    newStake != null ? Number((newStake - bet.total_stake).toFixed(2)) : null;
+
+  // Pré-cálculo do impacto na banca
+  const bankroll = await getUserBankroll(userId);
+  const warnings: string[] = [];
+  if (bankroll && stakeDelta != null && stakeDelta > 0) {
+    if (stakeDelta > bankroll.current_balance) {
+      throw new Error(
+        `Aumentar a stake em ${fmtBRL(stakeDelta)} estoura o saldo (${fmtBRL(bankroll.current_balance)}).`
+      );
+    }
+  }
+
+  const draft: DraftBetUpdatePayload = {
+    bet_id: bet.id,
+    old_stake: bet.total_stake,
+    old_odd: bet.combined_odd,
+    old_potential_return: bet.potential_return,
+    new_stake: newStake,
+    new_odd: newOdd,
+    new_potential_return: newReturn,
+    stake_delta: stakeDelta,
+    match_name: bet.match_name ?? "(jogo)",
+    reason: intent.raw.length > 200 ? null : intent.raw,
+  };
+  const action = await createUpdateBetDraft(userId, sessionId, draft);
+
+  const effectiveStake = newStake ?? bet.total_stake;
+  const effectiveOdd = newOdd ?? bet.combined_odd;
+  const effectiveReturn =
+    newReturn ?? Number((effectiveStake * effectiveOdd).toFixed(2));
+  const balanceAfter =
+    bankroll != null && stakeDelta != null
+      ? Number((bankroll.current_balance - stakeDelta).toFixed(2))
+      : null;
+
+  const lines: string[] = [];
+  lines.push(`Vou corrigir essa aposta? **${bet.match_name ?? bet.id.slice(0, 8)}**`);
+  lines.push("");
+  lines.push("**Antes → Depois**");
+  if (newStake != null) {
+    lines.push(
+      `- Stake: ${fmtBRL(bet.total_stake)} → **${fmtBRL(newStake)}**`
+    );
+  } else {
+    lines.push(`- Stake: ${fmtBRL(bet.total_stake)} (sem mudança)`);
+  }
+  if (newOdd != null) {
+    lines.push(
+      `- Odd: ${bet.combined_odd.toFixed(2)} → **${newOdd.toFixed(2)}**`
+    );
+  } else {
+    lines.push(`- Odd: ${bet.combined_odd.toFixed(2)} (sem mudança)`);
+  }
+  lines.push(
+    `- Retorno: ${fmtBRL(bet.potential_return)} → **${fmtBRL(effectiveReturn)}**`
+  );
+  if (stakeDelta != null && stakeDelta !== 0) {
+    lines.push("");
+    lines.push(
+      `**Impacto na banca:** ${stakeDelta > 0 ? "−" : "+"}${fmtBRL(Math.abs(stakeDelta))} (${stakeDelta > 0 ? "saída adicional" : "estorno parcial"})`
+    );
+    if (balanceAfter != null) {
+      lines.push(
+        `Saldo: ${fmtBRL(bankroll!.current_balance)} → ${fmtBRL(balanceAfter)}`
+      );
+    }
+  } else {
+    lines.push("");
+    lines.push("**Impacto na banca:** nenhum (stake não mudou).");
+  }
+  if (warnings.length > 0) {
+    lines.push("");
+    lines.push(...warnings);
+  }
+  lines.push("");
+  lines.push("Use os botões abaixo para **confirmar** ou **cancelar**.");
+
+  return {
+    text: lines.join("\n") + RESPONSIBILITY_FOOTER,
+    pending_action: action,
+  };
+}
+
 async function handleSaveReminder(
   userId: string,
   sessionId: string,
@@ -450,7 +579,8 @@ function handleFallback(): string {
     "Posso ajudar com:",
     "- **Explicar pick** — \"explica a pick do Vitória × Flamengo\"",
     "- **Montar combinação** — \"monta uma odd 3.00 com esse jogo\"",
-    "- **Salvar aposta** (com confirmação) — \"salva essa aposta com R$ 50\"",
+    "- **Salvar aposta** (com confirmação) — cole o texto da Bet365 ou diga \"salva essa aposta com R$ 50\"",
+    "- **Corrigir aposta** (com confirmação) — \"corrige a aposta para stake 188, odd 1.95 e retorno 367.04\"",
     "- **Criar lembrete** (com confirmação) — \"me lembra 10 minutos antes do jogo\"",
     "- **Consultar banca** — \"quanto posso apostar hoje?\"",
     "- **Conselho de risco** — \"estou pensando em colocar mais um jogo\"",
@@ -489,6 +619,12 @@ async function runDeterministic(args: {
         break;
       case "save_bet": {
         const r = await handleSaveBet(userId, sessionId, intent);
+        text = r.text;
+        pending_action = r.pending_action;
+        break;
+      }
+      case "update_bet": {
+        const r = await handleUpdateBet(userId, sessionId, intent);
         text = r.text;
         pending_action = r.pending_action;
         break;
