@@ -64,3 +64,70 @@ export const AUTO_PICK_LEAGUE_NAMES = [
 ] as const;
 
 export type AutoPickLeagueName = (typeof AUTO_PICK_LEAGUE_NAMES)[number];
+
+// ============================================================
+// Canônico por (name, country) — E.0A.1
+// ============================================================
+
+/**
+ * Lista canônica para matching contra o /leagues do API-Football.
+ *
+ * Cada entrada casa por `name` exato + `country` exato (case-insensitive).
+ * `alt_names` aceita variações regionais ("Brasileirão Série A" vira
+ * "Serie A" no payload do provider).
+ *
+ * Quando o catálogo (football_leagues_catalog) está populado, é ele que
+ * define is_auto_pick=true. Esta lista existe apenas para o script de
+ * sync saber QUAIS marcar.
+ */
+export interface CanonicalLeague {
+  name: string;
+  country: string;
+  alt_names?: string[];
+}
+
+export const AUTO_PICK_LEAGUES_CANONICAL: CanonicalLeague[] = [
+  { name: "Premier League", country: "England" },
+  { name: "La Liga", country: "Spain" },
+  { name: "Serie A", country: "Italy" },
+  // Brasileirão: API-Football usa "Serie A" + country "Brazil".
+  // Variantes regionais conhecidas ficam em alt_names para tolerância.
+  {
+    name: "Serie A",
+    country: "Brazil",
+    alt_names: ["Brasileirão Série A", "Brasileirao Serie A", "Brasileiro Serie A"],
+  },
+  { name: "Bundesliga", country: "Germany" },
+  { name: "Ligue 1", country: "France" },
+  { name: "Copa Do Brasil", country: "Brazil" },
+  { name: "Liga Profesional Argentina", country: "Argentina" },
+  { name: "Major League Soccer", country: "USA" },
+  { name: "Liga MX", country: "Mexico" },
+  { name: "CONMEBOL Libertadores", country: "World" },
+  { name: "CONMEBOL Sudamericana", country: "World" },
+  { name: "UEFA Champions League", country: "World" },
+  { name: "UEFA Europa League", country: "World" },
+];
+
+function norm(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase();
+}
+
+/**
+ * Decide se uma liga (vinda do /leagues) é auto-pick canônica.
+ * Compara `name` exato (+ alt_names) E `country` exato, ambos lowercased.
+ */
+export function isCanonicalAutoPickLeague(
+  leagueName: string | null | undefined,
+  countryName: string | null | undefined
+): boolean {
+  const n = norm(leagueName);
+  const c = norm(countryName);
+  if (!n || !c) return false;
+  for (const entry of AUTO_PICK_LEAGUES_CANONICAL) {
+    if (norm(entry.country) !== c) continue;
+    if (norm(entry.name) === n) return true;
+    if (entry.alt_names?.some((alt) => norm(alt) === n)) return true;
+  }
+  return false;
+}

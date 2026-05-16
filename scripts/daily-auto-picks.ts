@@ -146,16 +146,41 @@ async function main() {
   }
 
   // ============================================================
-  // 3. Listar fixtures da data filtrando por AUTO_PICK_LEAGUE_NAMES
+  // 3. Listar fixtures da data filtrando por catálogo (preferido)
+  //    ou por AUTO_PICK_LEAGUE_NAMES (fallback se catálogo vazio)
   // ============================================================
-  const { data: fixtureRows, error: fxErr } = await sb
+  const { data: catalogIds } = await sb
+    .from("football_leagues_catalog")
+    .select("api_league_id")
+    .eq("is_auto_pick", true);
+  const autoPickLeagueIds = (catalogIds ?? [])
+    .map((r) => Number(r.api_league_id))
+    .filter((n) => Number.isFinite(n));
+
+  let fixtureQuery = sb
     .from("football_fixtures")
     .select(
-      "id, api_fixture_id, league_name, home_team_name, away_team_name, status, kickoff_at"
+      "id, api_fixture_id, api_league_id, league_name, home_team_name, away_team_name, status, kickoff_at"
     )
     .eq("date", args.date)
-    .in("league_name", AUTO_PICK_LEAGUE_NAMES as readonly string[] as string[])
     .order("kickoff_at", { ascending: true, nullsFirst: false });
+
+  if (autoPickLeagueIds.length > 0) {
+    fixtureQuery = fixtureQuery.in("api_league_id", autoPickLeagueIds);
+    console.log(
+      `→ Filtro por catálogo: ${autoPickLeagueIds.length} api_league_id auto_pick`
+    );
+  } else {
+    fixtureQuery = fixtureQuery.in(
+      "league_name",
+      AUTO_PICK_LEAGUE_NAMES as readonly string[] as string[]
+    );
+    warn(
+      "Catálogo vazio — usando fallback por league_name (pega ligas regionais com mesmo nome). Rode sync:football-catalog."
+    );
+  }
+
+  const { data: fixtureRows, error: fxErr } = await fixtureQuery;
   if (fxErr) {
     const msg = `select fixtures: ${fxErr.message}`;
     warn(msg);
