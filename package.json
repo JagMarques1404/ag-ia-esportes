@@ -25,7 +25,8 @@
     "sync:football-catalog": "tsx scripts/sync-football-catalog.ts",
     "seed:football-catalog": "tsx scripts/seed-football-catalog.ts",
     "seed:manual-lineups": "tsx scripts/seed-manual-lineups.ts",
-    "report:manual-lineup-readiness": "tsx scripts/report-manual-lineup-readiness.ts"
+    "report:manual-lineup-readiness": "tsx scripts/report-manual-lineup-readiness.ts",
+    "import:manual-player-history": "tsx scripts/import-manual-player-history.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

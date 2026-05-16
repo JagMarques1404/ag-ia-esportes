@@ -1,0 +1,113 @@
+{
+  "fixture": 1492266,
+  "source": "manual_history",
+  "notes": "Histórico last5 coletado manualmente (boletim oficial + sofascore + ge.globo). Plano free do API-Football bloqueou /fixtures?team=&last=.",
+  "players": [
+    {
+      "player_name": "Hércules",
+      "team_name": "Fluminense",
+      "matches": [
+        {
+          "date": "2026-05-13",
+          "opponent": "Operário-PR",
+          "minutes": 90,
+          "shots": 2,
+          "shots_on": 0,
+          "fouls_committed": 4,
+          "fouls_drawn": 0,
+          "tackles": 4,
+          "interceptions": 1,
+          "key_passes": 0,
+          "yellow_cards": 1,
+          "red_cards": 0
+        },
+        {
+          "date": "2026-05-10",
+          "opponent": "Atlético-MG",
+          "minutes": 90,
+          "shots": 1,
+          "shots_on": 0,
+          "fouls_committed": 3,
+          "fouls_drawn": 2,
+          "tackles": 5,
+          "interceptions": 2,
+          "key_passes": 1,
+          "yellow_cards": 0,
+          "red_cards": 0
+        },
+        {
+          "date": "2026-05-06",
+          "opponent": "Cruzeiro",
+          "minutes": 87,
+          "shots": 3,
+          "shots_on": 1,
+          "fouls_committed": 2,
+          "fouls_drawn": 1,
+          "tackles": 3,
+          "interceptions": 0,
+          "key_passes": 2,
+          "yellow_cards": 0
+        }
+      ]
+    },
+    {
+      "player_name": "L. Acosta",
+      "team_name": "Fluminense",
+      "matches": [
+        {
+          "date": "2026-05-13",
+          "opponent": "Operário-PR",
+          "minutes": 78,
+          "shots": 3,
+          "shots_on": 2,
+          "fouls_committed": 1,
+          "fouls_drawn": 4,
+          "tackles": 1,
+          "interceptions": 0,
+          "key_passes": 3,
+          "yellow_cards": 0
+        },
+        {
+          "date": "2026-05-10",
+          "opponent": "Atlético-MG",
+          "minutes": 90,
+          "shots": 4,
+          "shots_on": 2,
+          "fouls_committed": 2,
+          "fouls_drawn": 3,
+          "key_passes": 2,
+          "yellow_cards": 1
+        }
+      ]
+    },
+    {
+      "player_name": "Luciano",
+      "team_name": "São Paulo",
+      "matches": [
+        {
+          "date": "2026-05-12",
+          "opponent": "Vasco da Gama",
+          "minutes": 90,
+          "shots": 4,
+          "shots_on": 2,
+          "fouls_committed": 1,
+          "fouls_drawn": 2,
+          "goals": 1,
+          "assists": 0,
+          "key_passes": 1,
+          "yellow_cards": 0
+        },
+        {
+          "date": "2026-05-08",
+          "opponent": "Palmeiras",
+          "minutes": 85,
+          "shots": 3,
+          "shots_on": 1,
+          "fouls_drawn": 3,
+          "key_passes": 2,
+          "yellow_cards": 0
+        }
+      ]
+    }
+  ]
+}
