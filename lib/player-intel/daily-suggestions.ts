@@ -62,6 +62,10 @@ export interface FixtureSuggestions {
   eligible_count: number;
   /** Quantas linhas totais (incluindo evitar / sample 0). */
   total_count: number;
+  /** Decisão do readiness gate (E.0A.5). */
+  readiness: "READY" | "WATCHLIST" | "BLOCKED";
+  /** Mensagem humana do gate. */
+  readiness_reason: string;
 }
 
 interface ProbRow {
@@ -301,11 +305,35 @@ export async function generateFixtureSuggestions(
     (l) => l.sample_size > 0 && l.recommendation !== "evitar"
   );
 
-  const safe = pickSafe(eligible);
-  const value = pickValue(eligible);
-  const mega = pickMega(eligible);
-  // Watchlist sempre que nenhum dos 3 blocos saiu OU pelo menos para
-  // referência ao usuário.
+  // ============================================================
+  // Readiness gate (E.0A.5) — se BLOCKED, só watchlist.
+  // ============================================================
+  const { evaluateFixtureReadinessForPick } = await import("./readiness-gate");
+  let readinessLevel: "READY" | "WATCHLIST" | "BLOCKED" = "BLOCKED";
+  let readinessReason = "gate não avaliado";
+  try {
+    const gate = await evaluateFixtureReadinessForPick(apiFixtureId);
+    readinessLevel = gate.level;
+    readinessReason = gate.reason;
+  } catch (err) {
+    readinessReason = `gate falhou: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  let safe: SuggestionBlock | null = null;
+  let value: SuggestionBlock | null = null;
+  let mega: SuggestionBlock | null = null;
+
+  if (readinessLevel === "READY") {
+    safe = pickSafe(eligible);
+    value = pickValue(eligible);
+    mega = pickMega(eligible);
+  } else if (readinessLevel === "WATCHLIST") {
+    // Permite só "value" quando estamos em WATCHLIST (não cria safe/mega).
+    value = pickValue(eligible);
+  }
+  // BLOCKED: nada além do watchlist abaixo.
+
+  // Watchlist sempre que nenhum bloco "real" saiu OU para referência.
   const watchlist =
     safe == null && value == null && mega == null
       ? pickWatchlist(deduped)
@@ -321,5 +349,7 @@ export async function generateFixtureSuggestions(
     watchlist,
     eligible_count: eligible.length,
     total_count: deduped.length,
+    readiness: readinessLevel,
+    readiness_reason: readinessReason,
   };
 }

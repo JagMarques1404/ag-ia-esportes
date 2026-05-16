@@ -24,7 +24,8 @@
     "daily:auto-picks": "tsx scripts/daily-auto-picks.ts",
     "sync:football-catalog": "tsx scripts/sync-football-catalog.ts",
     "seed:football-catalog": "tsx scripts/seed-football-catalog.ts",
-    "seed:manual-lineups": "tsx scripts/seed-manual-lineups.ts"
+    "seed:manual-lineups": "tsx scripts/seed-manual-lineups.ts",
+    "report:manual-lineup-readiness": "tsx scripts/report-manual-lineup-readiness.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

@@ -344,6 +344,9 @@ const MATCHES: ManualMatchInput[] = [
 interface CliArgs {
   dryRun: boolean;
   generateBoards: boolean;
+  resolveApi: boolean;
+  apiLimit: number;
+  season: number;
 }
 
 function parseArgs(): CliArgs {
@@ -356,7 +359,16 @@ function parseArgs(): CliArgs {
   const dryRun = dryRunRaw === undefined ? true : dryRunRaw !== "false";
   const gb = argMap.get("generateBoards");
   const generateBoards = gb === "true";
-  return { dryRun, generateBoards };
+  const resolveApi = argMap.get("resolveApi") === "true";
+  const apiLimit = Number.parseInt(argMap.get("apiLimit") ?? "10", 10);
+  const season = Number.parseInt(argMap.get("season") ?? "2026", 10);
+  return {
+    dryRun,
+    generateBoards,
+    resolveApi,
+    apiLimit: Number.isFinite(apiLimit) ? apiLimit : 10,
+    season: Number.isFinite(season) ? season : 2026,
+  };
 }
 
 // ============================================================
@@ -426,11 +438,16 @@ function normName(s: string): string {
 async function main() {
   const args = parseArgs();
   console.log(
-    `→ seed-manual-lineups dryRun=${args.dryRun} generateBoards=${args.generateBoards}\n`
+    `→ seed-manual-lineups dryRun=${args.dryRun} generateBoards=${args.generateBoards} resolveApi=${args.resolveApi} apiLimit=${args.apiLimit} season=${args.season}\n`
   );
 
   const { getSupabaseAdmin } = await import("../lib/supabase/admin");
+  const { resolveManualPlayerLocal, resolveManualPlayerViaApi, upsertAlias } =
+    await import("../lib/player-intel/player-identity-resolver");
   const sb = getSupabaseAdmin();
+
+  // Contador global de chamadas API durante a execução
+  let apiCallsUsed = 0;
 
   interface FixtureLocal {
     id: string;
@@ -697,9 +714,16 @@ async function main() {
         .eq("fixture_id", fixture.id)
         .in("source", ["manual_predicted", "manual_confirmed"]);
 
-      // 2. Para cada team, gera players, upsert football_players, INSERT
-      //    football_lineups + football_lineup_players.
+      // 2. Para cada team, RESOLVE cada jogador, upsert football_players,
+      //    INSERT football_lineups + football_lineup_players + alias.
       let totalPlayers = 0;
+      const fixtureCounters = {
+        matched_history: 0,
+        matched_no_history: 0,
+        ambiguous: 0,
+        unmatched: 0,
+        synthetic_fallback: 0,
+      };
       for (const side of ["home", "away"] as const) {
         const teamId = side === "home" ? fixture.home_team_id : fixture.away_team_id;
         const apiTeamId =
@@ -712,34 +736,123 @@ async function main() {
         const formation = side === "home" ? input.home_formation : input.away_formation;
         const teamSlug = normName(teamName);
 
-        // Upsert football_players com api_player_id sintético
-        const playerBasics = players.map((p) => ({
-          api_player_id: syntheticApiPlayerId(p.name, teamSlug),
-          name: p.name,
-          current_team_id: teamId,
-        }));
-        // Dedupe defensivo dentro do mesmo time
+        // RESOLVE cada jogador via resolver local
+        interface ResolvedSeed {
+          playerName: string;
+          position: ParsedPlayer["position"];
+          api_player_id: number;
+          football_player_id: string | null;
+          status: "matched" | "matched_no_history" | "ambiguous" | "unmatched" | "synthetic_fallback";
+        }
+        const resolvedList: ResolvedSeed[] = [];
+        for (const p of players) {
+          // 1) Tenta local
+          let r = await resolveManualPlayerLocal({
+            playerName: p.name,
+            teamName,
+            apiTeamId,
+          });
+
+          // 2) Se local falhou e --resolveApi=true E ainda tem orçamento,
+          //    tenta API. Em dryRun a flag é ignorada — não chama API.
+          const localFailed =
+            r.status === "unmatched" || r.status === "ambiguous";
+          if (
+            localFailed &&
+            args.resolveApi &&
+            !args.dryRun &&
+            apiCallsUsed < args.apiLimit
+          ) {
+            apiCallsUsed++;
+            const apiResult = await resolveManualPlayerViaApi({
+              playerName: p.name,
+              teamName,
+              apiTeamId,
+              season: args.season,
+            });
+            // Se API resolveu melhor, substitui. Se bloqueou plano,
+            // mantém local mas atualiza status para api_blocked.
+            if (
+              apiResult.status === "matched" ||
+              apiResult.status === "matched_no_history"
+            ) {
+              r = apiResult;
+            } else if (apiResult.status === "api_blocked") {
+              r = { ...r, status: "api_blocked", notes: apiResult.notes };
+            } else if (apiResult.status === "ambiguous" && r.status !== "ambiguous") {
+              r = apiResult;
+            }
+          }
+
+          await upsertAlias(
+            { playerName: p.name, teamName, apiTeamId },
+            r
+          );
+
+          if (
+            (r.status === "matched" || r.status === "matched_no_history") &&
+            r.api_player_id != null
+          ) {
+            resolvedList.push({
+              playerName: p.name,
+              position: p.position,
+              api_player_id: r.api_player_id,
+              football_player_id: r.football_player_id,
+              status: r.status,
+            });
+            if (r.status === "matched") fixtureCounters.matched_history++;
+            else fixtureCounters.matched_no_history++;
+          } else {
+            // Fallback sintético
+            const syn = syntheticApiPlayerId(p.name, teamSlug);
+            resolvedList.push({
+              playerName: p.name,
+              position: p.position,
+              api_player_id: syn,
+              football_player_id: null,
+              status:
+                r.status === "ambiguous" ? "ambiguous" : "synthetic_fallback",
+            });
+            if (r.status === "ambiguous") fixtureCounters.ambiguous++;
+            else fixtureCounters.unmatched++;
+            fixtureCounters.synthetic_fallback++;
+          }
+        }
+
+        // Upsert football_players para os sintéticos (matched já existem)
+        const syntheticBasics = resolvedList
+          .filter((r) => r.api_player_id >= 800_000_000)
+          .map((r) => ({
+            api_player_id: r.api_player_id,
+            name: r.playerName,
+            current_team_id: teamId,
+          }));
+        // Dedupe defensivo
         const seenApiIds = new Set<number>();
-        const deduped = playerBasics.filter((p) => {
+        const dedupedSynth = syntheticBasics.filter((p) => {
           if (seenApiIds.has(p.api_player_id)) return false;
           seenApiIds.add(p.api_player_id);
           return true;
         });
-        const { error: pErr } = await sb
-          .from("football_players")
-          .upsert(deduped, { onConflict: "api_player_id" });
-        if (pErr) throw new Error(`upsert players: ${pErr.message}`);
+        if (dedupedSynth.length > 0) {
+          const { error: pErr } = await sb
+            .from("football_players")
+            .upsert(dedupedSynth, { onConflict: "api_player_id" });
+          if (pErr) throw new Error(`upsert players: ${pErr.message}`);
+        }
 
-        // Resolver player_id local
-        const apiIds = deduped.map((p) => p.api_player_id);
-        const { data: locals } = await sb
-          .from("football_players")
-          .select("id, api_player_id")
-          .in("api_player_id", apiIds);
-        const playerIdByApi = new Map<number, string>();
-        for (const lp of locals ?? [])
-          if (lp.api_player_id != null)
-            playerIdByApi.set(lp.api_player_id, lp.id as string);
+        // Resolver player_id local para sintéticos
+        const syntheticApiIds = dedupedSynth.map((p) => p.api_player_id);
+        let synthPlayerIdByApi = new Map<number, string>();
+        if (syntheticApiIds.length > 0) {
+          const { data: locals } = await sb
+            .from("football_players")
+            .select("id, api_player_id")
+            .in("api_player_id", syntheticApiIds);
+          for (const lp of locals ?? [])
+            if (lp.api_player_id != null)
+              synthPlayerIdByApi.set(lp.api_player_id, lp.id as string);
+        }
 
         // 3. INSERT football_lineups
         const { data: lineupRow, error: lErr } = await sb
@@ -758,14 +871,15 @@ async function main() {
         if (lErr || !lineupRow) throw new Error(`insert lineup ${side}: ${lErr?.message}`);
 
         // 4. INSERT football_lineup_players
-        const lpRows = players.map((p) => ({
+        const lpRows = resolvedList.map((r) => ({
           lineup_id: lineupRow.id as string,
           fixture_id: fixture.id,
           team_id: teamId,
-          api_player_id: syntheticApiPlayerId(p.name, teamSlug),
-          player_id: playerIdByApi.get(syntheticApiPlayerId(p.name, teamSlug)) ?? null,
-          player_name: p.name,
-          position: p.position,
+          api_player_id: r.api_player_id,
+          player_id:
+            r.football_player_id ?? synthPlayerIdByApi.get(r.api_player_id) ?? null,
+          player_name: r.playerName,
+          position: r.position,
           grid: null,
           number: null,
           is_starting: true,
@@ -777,7 +891,26 @@ async function main() {
         if (lpErr) throw new Error(`insert lineup_players ${side}: ${lpErr.message}`);
 
         totalPlayers += lpRows.length;
-        console.log(`   ✓ ${side}: ${lpRows.length} players inseridos`);
+        const realCount = resolvedList.filter(
+          (r) => r.status === "matched" || r.status === "matched_no_history"
+        ).length;
+        console.log(
+          `   ✓ ${side}: ${lpRows.length} players (${realCount} resolvidos, ${lpRows.length - realCount} sintéticos)`
+        );
+      }
+
+      // Report por jogo
+      const totalGame = totalPlayers || 1;
+      const readyPct = Math.round(
+        (fixtureCounters.matched_history / totalGame) * 100
+      );
+      console.log(
+        `   ↳ matched_history=${fixtureCounters.matched_history}, matched_no_history=${fixtureCounters.matched_no_history}, ambiguous=${fixtureCounters.ambiguous}, unmatched=${fixtureCounters.unmatched} · readiness=${readyPct}%`
+      );
+      if (fixtureCounters.matched_history < 3) {
+        console.log(
+          `   ⚠ Este jogo ainda não tem base suficiente. Rode collect:player-last5 ou registre aliases para resolver os ${fixtureCounters.unmatched + fixtureCounters.ambiguous} pendentes.`
+        );
       }
 
       results.push({
