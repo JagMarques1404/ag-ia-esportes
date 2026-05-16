@@ -33,34 +33,13 @@ async function fetchAllPaginated<T>(
   return all;
 }
 
-/**
- * Ligas priorizadas para acumular histórico individual.
- * Cobertura comprovada de /fixtures/players nessas competições.
- * Pode ser sobrescrita via options.leagueNames.
- */
-export const PRIORITY_LEAGUE_NAMES = [
-  "Major League Soccer",
-  "Copa Do Brasil",
-  "Primera A",
-  "Liga Profesional Argentina",
-  "Liga MX",
-] as const;
-
-/**
- * Ligas com cobertura conhecidamente fraca de /fixtures/players —
- * o provider devolve `response: []` ou IDs de jogador inválidos.
- * Bloqueadas por padrão para não desperdiçar quota.
- *
- * Atualizar conforme novas observações em produção.
- */
-export const LOW_COVERAGE_LEAGUE_NAMES = [
-  "USL League One",
-  "USL League Two",
-  "USL W League",
-  "MLS Next Pro",
-  "Liga MX U21",
-  "Division di Honor",
-] as const;
+// Listas canônicas vivem em lib/football-data/priority-leagues.ts.
+// Re-exportadas aqui para preservar compatibilidade de imports antigos.
+import {
+  PRIORITY_LEAGUE_NAMES,
+  LOW_COVERAGE_LEAGUE_NAMES,
+} from "@/lib/football-data/priority-leagues";
+export { PRIORITY_LEAGUE_NAMES, LOW_COVERAGE_LEAGUE_NAMES };
 
 export interface CandidateOptions {
   /** Filtra fixtures de uma data específica (YYYY-MM-DD). */
