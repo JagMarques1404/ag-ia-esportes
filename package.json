@@ -22,7 +22,8 @@
     "test:player-action-board": "tsx scripts/test-player-action-board.ts",
     "test:bet-parser": "tsx scripts/test-bet-text-parser.ts",
     "daily:auto-picks": "tsx scripts/daily-auto-picks.ts",
-    "sync:football-catalog": "tsx scripts/sync-football-catalog.ts"
+    "sync:football-catalog": "tsx scripts/sync-football-catalog.ts",
+    "seed:football-catalog": "tsx scripts/seed-football-catalog.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

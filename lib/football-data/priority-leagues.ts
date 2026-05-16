@@ -113,6 +113,46 @@ function norm(s: string | null | undefined): string {
   return (s ?? "").trim().toLowerCase();
 }
 
+// ============================================================
+// Seed estático (E.0A.2) — IDs canônicos do API-Football
+//
+// Usado por scripts/seed-football-catalog.ts quando o plano free
+// bloqueia /leagues. IDs verificados em produção do provider.
+// Atualizar se o provider reatribuir IDs (raro).
+// ============================================================
+
+export interface SeededLeague {
+  api_league_id: number;
+  name: string;
+  type: "League" | "Cup";
+  country: string;
+  country_code: string | null;
+}
+
+export const SEEDED_AUTO_PICK_LEAGUES: SeededLeague[] = [
+  // Europa — top 5
+  { api_league_id: 39,  name: "Premier League",            type: "League", country: "England",   country_code: "GB" },
+  { api_league_id: 140, name: "La Liga",                   type: "League", country: "Spain",     country_code: "ES" },
+  { api_league_id: 135, name: "Serie A",                   type: "League", country: "Italy",     country_code: "IT" },
+  { api_league_id: 78,  name: "Bundesliga",                type: "League", country: "Germany",   country_code: "DE" },
+  { api_league_id: 61,  name: "Ligue 1",                   type: "League", country: "France",    country_code: "FR" },
+
+  // Brasil
+  { api_league_id: 71,  name: "Serie A",                   type: "League", country: "Brazil",    country_code: "BR" },
+  { api_league_id: 73,  name: "Copa Do Brasil",            type: "Cup",    country: "Brazil",    country_code: "BR" },
+
+  // Hispano-Americano
+  { api_league_id: 128, name: "Liga Profesional Argentina", type: "League", country: "Argentina", country_code: "AR" },
+  { api_league_id: 253, name: "Major League Soccer",        type: "League", country: "USA",       country_code: "US" },
+  { api_league_id: 262, name: "Liga MX",                    type: "League", country: "Mexico",    country_code: "MX" },
+
+  // Continentais (country="World" no provider)
+  { api_league_id: 2,   name: "UEFA Champions League",     type: "Cup",    country: "World",     country_code: null },
+  { api_league_id: 3,   name: "UEFA Europa League",        type: "Cup",    country: "World",     country_code: null },
+  { api_league_id: 13,  name: "CONMEBOL Libertadores",     type: "Cup",    country: "World",     country_code: null },
+  { api_league_id: 11,  name: "CONMEBOL Sudamericana",     type: "Cup",    country: "World",     country_code: null },
+];
+
 /**
  * Decide se uma liga (vinda do /leagues) é auto-pick canônica.
  * Compara `name` exato (+ alt_names) E `country` exato, ambos lowercased.

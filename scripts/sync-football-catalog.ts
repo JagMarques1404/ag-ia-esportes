@@ -186,7 +186,10 @@ async function main() {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (isPlanLimitError(msg)) {
-      console.error(`\n⛔ Plano grátis bloqueia /leagues. Parando.`);
+      console.error(`\n⛔ Plano free do API-Football bloqueia /leagues?season=.`);
+      console.error(`   Use o seed estático em vez disso:`);
+      console.error(`     npm run seed:football-catalog -- --dryRun=false`);
+      console.error(`   (popula as 14 ligas principais sem chamar API)`);
       process.exit(2);
     }
     console.error(`\n✗ /leagues falhou: ${msg.slice(0, 200)}`);
