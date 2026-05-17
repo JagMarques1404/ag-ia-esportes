@@ -542,6 +542,13 @@ export default async function StudioJogosPage({
                       <StudioForceAnalyzeOneButton
                         apiFixtureId={r.api_fixture_id}
                       />
+                      {(r.display_status === "SEM_LINEUP" ||
+                        (r.display_status === "BLOQUEADO" &&
+                          r.lineup_count === 0)) && (
+                        <span className="rounded-md border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+                          + adicionar escalação
+                        </span>
+                      )}
                       <span className="text-[10px] text-muted-foreground">
                         ver detalhe →
                       </span>

@@ -20,6 +20,7 @@ import {
   type GeneratedPick,
   type PickLeg,
 } from "@/lib/player-intel/final-pick-generator";
+import { ExternalLineupForm } from "@/components/studio/external-lineup-form";
 
 export const dynamic = "force-dynamic";
 
@@ -261,6 +262,9 @@ export default async function StudioFixtureDetailPage({
             </p>
           </div>
         </div>
+
+        {/* Lineup Scout — sempre disponível, mas com call-to-action quando falta lineup */}
+        <ExternalLineupForm apiFixtureId={apiFixtureId} />
 
         {/* Readiness */}
         {gate && (

@@ -244,6 +244,9 @@ export async function processOneFixture(
     .eq("fixture_id", meta.id);
   const hasLineup = (existingLineup ?? 0) > 0;
 
+  // Flag: sync da API foi tentado e retornou 0 (não é dryRun + sem lineup)
+  let apiReturnedEmpty = false;
+
   if (!hasLineup && !opts.dryRun) {
     const q = await getQuotaSummary().catch(() => null);
     if (q && q.remaining <= QUOTA_FLOOR) {
@@ -252,14 +255,21 @@ export async function processOneFixture(
       try {
         const lu = await provider.syncFixtureLineups(opts.apiFixtureId);
         result.reqs_used += 1;
+        if (lu.total_players === 0) {
+          apiReturnedEmpty = true;
+          result.warnings.push(
+            "API-Football não retornou lineup para este fixture — adicione escalação externa em /studio/jogos/" +
+              opts.apiFixtureId
+          );
+        }
         if (persistSchedule) {
           await sb
             .from("fixture_analysis_schedule")
             .update({
               last_lineup_check_at: new Date().toISOString(),
-              lineup_source: "api_predicted",
+              lineup_source: apiReturnedEmpty ? null : "api_predicted",
               players_total: lu.total_players,
-              status: "lineup_confirmed",
+              status: lu.total_players > 0 ? "lineup_confirmed" : "lineup_missing",
             })
             .eq("api_fixture_id", opts.apiFixtureId);
         }
@@ -276,6 +286,22 @@ export async function processOneFixture(
         }
       }
     }
+  }
+
+  // Re-conta lineup pós-sync (pode ter sido vazio mesmo após chamada API)
+  const { count: postSyncLineup } = await sb
+    .from("football_lineup_players")
+    .select("*", { count: "exact", head: true })
+    .eq("fixture_id", meta.id);
+  if (apiReturnedEmpty && (postSyncLineup ?? 0) === 0) {
+    // API retornou vazio E não tem external/manual ainda → atalho BLOCKED
+    // com mensagem específica para guiar o usuário.
+    result.readiness = "BLOCKED";
+    result.readiness_reason = "API_LINEUP_UNAVAILABLE";
+    result.blocked_reason =
+      "API-Football não retornou lineup — adicione escalação externa (FutStats/FotMob/boletim) em /studio/jogos/" +
+      opts.apiFixtureId;
+    return result;
   }
 
   // ============================================================
