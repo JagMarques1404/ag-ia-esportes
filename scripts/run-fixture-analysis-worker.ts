@@ -30,6 +30,16 @@ interface CliArgs {
   now: Date;
   dryRun: boolean;
   maxFixtures: number;
+  /** Quando true, ignora janela de fase (T-2h..T-15m) e processa qualquer jogo. */
+  forceAnalyze: boolean;
+  /** Filtra fixtures cujo kickoff_at > now. */
+  futureOnly: boolean;
+  /** Filtra fixtures cujo kickoff_at >= "HH:mm" BR. */
+  fromTime: string | null;
+  /** Se set, processa só esse api_fixture_id. */
+  fixture: number | null;
+  /** Data alvo para o --fixture (se não existir no schedule, busca em football_fixtures). */
+  date: string | null;
 }
 
 function parseArgs(): CliArgs {
@@ -46,10 +56,23 @@ function parseArgs(): CliArgs {
   const dryRunRaw = argMap.get("dryRun");
   const dryRun = dryRunRaw === undefined ? true : dryRunRaw !== "false";
   const maxFixtures = Number.parseInt(argMap.get("maxFixtures") ?? "30", 10);
+  const fixture = argMap.get("fixture")
+    ? Number.parseInt(argMap.get("fixture")!, 10)
+    : null;
+  const fromTimeRaw = argMap.get("fromTime");
+  const fromTime =
+    fromTimeRaw && /^\d{2}:\d{2}$/.test(fromTimeRaw) ? fromTimeRaw : null;
+  const dateRaw = argMap.get("date");
+  const date = dateRaw && /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null;
   return {
     now,
     dryRun,
     maxFixtures: Number.isFinite(maxFixtures) ? maxFixtures : 30,
+    forceAnalyze: argMap.get("forceAnalyze") === "true",
+    futureOnly: argMap.get("futureOnly") === "true",
+    fromTime,
+    fixture: Number.isFinite(fixture as number) ? (fixture as number) : null,
+    date,
   };
 }
 
@@ -114,10 +137,218 @@ interface ResultRow {
   warnings: string[];
 }
 
+// ============================================================
+// Branch FORCE-ANALYZE: usa processOneFixture (lib/player-intel/
+// fixture-processor) que ignora janela temporal.
+// ============================================================
+
+async function runForceAnalyze(
+  args: CliArgs,
+  sb: ReturnType<typeof import("../lib/supabase/admin").getSupabaseAdmin>
+): Promise<void> {
+  const { processOneFixture } = await import(
+    "../lib/player-intel/fixture-processor"
+  );
+
+  // Coleta lista de api_fixture_ids alvo
+  let targetIds: number[] = [];
+  if (args.fixture != null) {
+    targetIds = [args.fixture];
+  } else {
+    // Filtra fixtures futuros (ou >= fromTime BR no dia)
+    const now = args.now;
+    const date = args.date ?? now.toISOString().slice(0, 10);
+    const dayStart = `${date}T03:00:00Z`;
+    const dnext = (() => {
+      const d = new Date(`${date}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + 1);
+      return d.toISOString().split("T")[0];
+    })();
+    const dayEnd = `${dnext}T03:00:00Z`;
+
+    // Catálogo
+    const { data: catalogIds } = await sb
+      .from("football_leagues_catalog")
+      .select("api_league_id")
+      .eq("is_auto_pick", true);
+    const autoPickIds = (catalogIds ?? [])
+      .map((r) => Number(r.api_league_id))
+      .filter((n) => Number.isFinite(n));
+
+    function buildQ() {
+      let q = sb
+        .from("football_fixtures")
+        .select("api_fixture_id, kickoff_at, date")
+        .order("kickoff_at", { ascending: true, nullsFirst: false });
+      if (autoPickIds.length > 0) q = q.in("api_league_id", autoPickIds);
+      return q;
+    }
+    const [byDate, byKick] = await Promise.all([
+      buildQ().eq("date", date),
+      buildQ().gte("kickoff_at", dayStart).lt("kickoff_at", dayEnd),
+    ]);
+    const merged = new Map<number, { api_fixture_id: number; kickoff_at: string | null }>();
+    for (const r of (byDate.data ?? []) as Array<{
+      api_fixture_id: number;
+      kickoff_at: string | null;
+    }>)
+      merged.set(r.api_fixture_id, r);
+    for (const r of (byKick.data ?? []) as Array<{
+      api_fixture_id: number;
+      kickoff_at: string | null;
+    }>)
+      if (!merged.has(r.api_fixture_id)) merged.set(r.api_fixture_id, r);
+
+    let fixtures = Array.from(merged.values());
+    // Filtro temporal
+    if (args.futureOnly) {
+      fixtures = fixtures.filter(
+        (f) => f.kickoff_at != null && new Date(f.kickoff_at) > now
+      );
+    }
+    if (args.fromTime) {
+      const cutoffBr = new Date(`${date}T${args.fromTime}:00-03:00`);
+      fixtures = fixtures.filter(
+        (f) => f.kickoff_at != null && new Date(f.kickoff_at) >= cutoffBr
+      );
+    }
+    targetIds = fixtures
+      .sort((a, b) =>
+        (a.kickoff_at ?? "").localeCompare(b.kickoff_at ?? "")
+      )
+      .slice(0, args.maxFixtures)
+      .map((f) => f.api_fixture_id);
+  }
+
+  console.log(
+    `→ FORCE-ANALYZE: ${targetIds.length} fixture(s) alvo`
+  );
+  if (targetIds.length === 0) {
+    console.log("(nada a processar — confira --futureOnly / --fromTime / --date)");
+    return;
+  }
+
+  // Processa cada fixture via processOneFixture
+  interface SnapshotRow {
+    api_fixture_id: number;
+    match_name: string | null;
+    league_name: string | null;
+    kickoff_at: string | null;
+    readiness: string;
+    lineup: number;
+    history: number;
+    sample3: number;
+    dq: number;
+    strong: number;
+    picks: number;
+    reqs: number;
+    blocked: string | null;
+    warnings: number;
+  }
+  const summary: SnapshotRow[] = [];
+
+  for (const apiFixtureId of targetIds) {
+    console.log(`\n→ processOneFixture(${apiFixtureId})`);
+    try {
+      const snap = await processOneFixture({
+        apiFixtureId,
+        dryRun: args.dryRun,
+        last: 5,
+        persistSchedule: true,
+      });
+      console.log(
+        `   ${snap.readiness}  ${snap.match_name ?? "?"} (${snap.league_name ?? "?"})`
+      );
+      console.log(
+        `   lineup ${snap.lineup_count}p · hist ${snap.players_with_history} · sample3+ ${snap.sample3_count} · dq ${snap.dq_avg.toFixed(2)} · strong ${snap.strong_count} · picks ${snap.picks_drafted} · reqs ${snap.reqs_used}`
+      );
+      if (snap.blocked_reason) {
+        console.log(`   ✗ BLOCKED reason: ${snap.blocked_reason}`);
+      }
+      for (const w of snap.warnings.slice(0, 3)) {
+        console.log(`   ⚠ ${w}`);
+      }
+      summary.push({
+        api_fixture_id: snap.api_fixture_id,
+        match_name: snap.match_name,
+        league_name: snap.league_name,
+        kickoff_at: snap.kickoff_at,
+        readiness: snap.readiness,
+        lineup: snap.lineup_count,
+        history: snap.players_with_history,
+        sample3: snap.sample3_count,
+        dq: snap.dq_avg,
+        strong: snap.strong_count,
+        picks: snap.picks_drafted,
+        reqs: snap.reqs_used,
+        blocked: snap.blocked_reason,
+        warnings: snap.warnings.length,
+      });
+    } catch (err) {
+      console.error(
+        `   ✗ erro: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  // Relatório final
+  console.log("\n=== FORCE-ANALYZE RELATÓRIO ===");
+  console.log(
+    "fixture | readiness | lineup | hist | sample3 | dq | strong | picks | reqs"
+  );
+  for (const r of summary) {
+    console.log(
+      [
+        String(r.api_fixture_id).padStart(8),
+        r.readiness.padEnd(10),
+        String(r.lineup).padStart(6),
+        String(r.history).padStart(5),
+        String(r.sample3).padStart(7),
+        r.dq.toFixed(2).padStart(4),
+        String(r.strong).padStart(6),
+        String(r.picks).padStart(5),
+        String(r.reqs).padStart(5),
+      ].join(" | ")
+    );
+  }
+  // Agregado
+  const agg = summary.reduce<Record<string, number>>((a, r) => {
+    a[r.readiness] = (a[r.readiness] ?? 0) + 1;
+    return a;
+  }, {});
+  console.log("\n=== Agregado ===");
+  for (const [k, v] of Object.entries(agg)) console.log(`  ${k.padEnd(12)} ${v}`);
+  const totalReqs = summary.reduce((a, r) => a + r.reqs, 0);
+  const totalPicks = summary.reduce((a, r) => a + r.picks, 0);
+  console.log(`  reqs usadas: ${totalReqs}`);
+  console.log(`  picks gravadas: ${totalPicks}`);
+
+  // Motivos de BLOCKED
+  const blocked = summary.filter((r) => r.readiness === "BLOCKED" && r.blocked);
+  if (blocked.length > 0) {
+    console.log("\n=== Motivos de BLOCKED ===");
+    for (const r of blocked) {
+      console.log(
+        `  ${r.api_fixture_id} ${r.match_name ?? "?"} — ${r.blocked}`
+      );
+    }
+  }
+
+  if (args.dryRun) {
+    console.log("\n[dryRun] sem writes. Para aplicar:");
+    console.log(
+      `  npm run worker:fixture-analysis -- --forceAnalyze=true --futureOnly=${args.futureOnly}${args.fromTime ? ` --fromTime=${args.fromTime}` : ""} --dryRun=false`
+    );
+  }
+}
+
 async function main() {
   const args = parseArgs();
   console.log(
-    `→ worker dryRun=${args.dryRun} now=${args.now.toISOString()} max=${args.maxFixtures}\n`
+    `→ worker dryRun=${args.dryRun} now=${args.now.toISOString()} max=${args.maxFixtures}`
+  );
+  console.log(
+    `   flags: forceAnalyze=${args.forceAnalyze} futureOnly=${args.futureOnly} fromTime=${args.fromTime ?? "—"} fixture=${args.fixture ?? "—"}\n`
   );
 
   const { getSupabaseAdmin } = await import("../lib/supabase/admin");
@@ -135,6 +366,9 @@ async function main() {
     generateGameWatchlist,
     saveGeneratedPick,
   } = await import("../lib/player-intel/final-pick-generator");
+  const { processOneFixture } = await import(
+    "../lib/player-intel/fixture-processor"
+  );
   const { getApiQuotaFloor, getApiPlanName, getApiRequestDelayMs } =
     await import("../lib/api-football/config");
   const sb = getSupabaseAdmin();
@@ -142,6 +376,14 @@ async function main() {
   const QUOTA_FLOOR = getApiQuotaFloor();
   const DELAY_MS = getApiRequestDelayMs();
   console.log(`→ plano=${getApiPlanName()} quota_floor=${QUOTA_FLOOR} delay=${DELAY_MS}ms\n`);
+
+  // ============================================================
+  // BRANCH FORCE-ANALYZE: ignora janela temporal. Processa fixtures
+  // por (a) --fixture=ID OU (b) --futureOnly/--fromTime sobre o catálogo.
+  // ============================================================
+  if (args.forceAnalyze || args.fixture != null) {
+    return await runForceAnalyze(args, sb);
+  }
 
   // Janela ampla: pega tudo entre [now-2h, now+24h] para filtrar por fase
   const lowerIso = new Date(args.now.getTime() - 2 * 60 * 60_000).toISOString();

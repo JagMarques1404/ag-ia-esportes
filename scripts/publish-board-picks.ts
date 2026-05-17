@@ -196,11 +196,22 @@ async function main() {
     `   ↳ por date=${args.date}: ${(byDate.data ?? []).length}, por kickoff BR-day: ${(byKickoff.data ?? []).length}, filtrados temporalmente: ${totalBeforeTimeFilter - allFx.length}`
   );
 
-  // 2. Avaliar readiness e filtrar READY (ou WATCHLIST se includeWatchlist)
+  // 2. Avaliar readiness e filtrar READY (ou WATCHLIST se includeWatchlist).
+  //    E.0A.12: ao listar BLOCKED, mostrar contadores ricos para diagnóstico.
   const eligible: Array<{
     fx: (typeof allFx)[number];
     gateLevel: "READY" | "WATCHLIST" | "BLOCKED";
   }> = [];
+  const blockedDiagnostics: Array<{
+    fx: (typeof allFx)[number];
+    reason: string;
+    lineup: number;
+    history: number;
+    sample3: number;
+    dq: number;
+    strong: number;
+  }> = [];
+
   for (const fx of allFx) {
     try {
       const gate = await evaluateFixtureReadinessForPick(fx.api_fixture_id);
@@ -218,6 +229,39 @@ async function main() {
         (args.includeWatchlist && gate.level === "WATCHLIST") ||
         (args.forceDraft && gate.level !== "BLOCKED");
       if (shouldInclude) eligible.push({ fx, gateLevel: gate.level });
+      if (gate.level === "BLOCKED") {
+        // Carrega snapshot bruto para diagnóstico (E.0A.12)
+        const [{ count: lineupCnt }, { data: probs }] = await Promise.all([
+          sb
+            .from("football_lineup_players")
+            .select("*", { count: "exact", head: true })
+            .eq("fixture_id", fx.id),
+          sb
+            .from("football_player_action_probabilities")
+            .select("recommendation, sample_size, data_quality_score")
+            .eq("api_fixture_id", fx.api_fixture_id),
+        ]);
+        const probRows = (probs ?? []) as Array<{
+          recommendation: string | null;
+          sample_size: number | null;
+          data_quality_score: number | null;
+        }>;
+        const sample3 = probRows.filter((p) => (p.sample_size ?? 0) >= 3).length;
+        const strong = probRows.filter((p) => p.recommendation === "forte").length;
+        const dqVals = probRows
+          .map((p) => Number(p.data_quality_score))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        const dq = dqVals.length > 0 ? dqVals.reduce((a, b) => a + b, 0) / dqVals.length : 0;
+        blockedDiagnostics.push({
+          fx,
+          reason: gate.reason,
+          lineup: lineupCnt ?? 0,
+          history: gate.with_history,
+          sample3,
+          dq: Number(dq.toFixed(2)),
+          strong,
+        });
+      }
     } catch (err) {
       console.warn(
         `   ⚠ gate falhou para ${fx.api_fixture_id}: ${err instanceof Error ? err.message : err}`
@@ -231,6 +275,32 @@ async function main() {
   );
   if (readyFx.length === 0) {
     console.log("   (nada a publicar)");
+    if (blockedDiagnostics.length > 0) {
+      console.log("\n=== Diagnóstico dos fixtures BLOCKED ===");
+      console.log(
+        "fixture | jogo | lineup | hist | sample3 | dq | strong | motivo"
+      );
+      for (const b of blockedDiagnostics) {
+        console.log(
+          [
+            String(b.fx.api_fixture_id).padStart(8),
+            `${b.fx.home_team_name} × ${b.fx.away_team_name}`.slice(0, 35).padEnd(35),
+            String(b.lineup).padStart(6),
+            String(b.history).padStart(4),
+            String(b.sample3).padStart(7),
+            b.dq.toFixed(2).padStart(4),
+            String(b.strong).padStart(6),
+            b.reason.slice(0, 60),
+          ].join(" | ")
+        );
+      }
+      console.log(
+        "\n→ Para destravar: rode forceAnalyze do worker:"
+      );
+      console.log(
+        `  npm run worker:fixture-analysis -- --forceAnalyze=true --futureOnly=true${args.fromTime ? ` --fromTime=${args.fromTime}` : ""} --dryRun=false`
+      );
+    }
     process.exit(0);
   }
 

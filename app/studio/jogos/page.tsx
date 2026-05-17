@@ -12,6 +12,10 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StudioUpcomingMultiButton } from "@/components/studio/upcoming-multi-button";
+import {
+  StudioForceAnalyzeAllButton,
+  StudioForceAnalyzeOneButton,
+} from "@/components/studio/force-analyze-button";
 
 export const dynamic = "force-dynamic";
 
@@ -403,6 +407,7 @@ export default async function StudioJogosPage({
         </div>
 
         <StudioUpcomingMultiButton date={date} />
+        <StudioForceAnalyzeAllButton date={date} />
 
         <div className="flex flex-wrap gap-3 text-xs">
           <Pill label="Total" value={rows.length} />
@@ -534,6 +539,9 @@ export default async function StudioJogosPage({
                       <span className="rounded-md border border-border/60 bg-background/40 px-2 py-0.5 text-[10px] uppercase text-muted-foreground">
                         api={r.api_fixture_id}
                       </span>
+                      <StudioForceAnalyzeOneButton
+                        apiFixtureId={r.api_fixture_id}
+                      />
                       <span className="text-[10px] text-muted-foreground">
                         ver detalhe →
                       </span>
