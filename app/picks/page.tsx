@@ -82,31 +82,10 @@ export default async function PicksPage({
   } = await supabase.auth.getUser();
   const isLoggedIn = !!user;
 
+  // E.0A.11: removido o card "fake" de exemplo. Mostra apenas picks reais.
   const realPicks = await getPicksByDate(requestedDate);
   const isExample = realPicks.length === 0;
-  const picks: DailyPick[] = isExample
-    ? // Quando não há picks reais, mostramos os exemplos com ressalva.
-      // Importante: não usamos getTodayPicks() porque ele faria fallback
-      // só para a data de hoje; aqui queremos respeitar a data pedida.
-      [
-        {
-          id: "example-segura",
-          match: "Exemplo · selecione uma data com publicação",
-          league: "—",
-          risk: "Segura",
-          odd_target: 1.9,
-          status: "Em análise",
-          markets: [
-            { player: "(jogador 1)", market: "(mercado a publicar)" },
-            { player: "(jogador 2)", market: "(mercado a publicar)" },
-            { player: "(jogador 3)", market: "(mercado a publicar)" },
-          ],
-          rationale:
-            "Sem pick real publicada para esta data. Use o seletor para escolher outra data ou aguarde a publicação do dia.",
-          is_example: true,
-        },
-      ]
-    : realPicks;
+  const picks: DailyPick[] = realPicks;
 
   const dateLabel = new Intl.DateTimeFormat("pt-BR", {
     weekday: "short",
@@ -174,11 +153,20 @@ export default async function PicksPage({
           </form>
 
           {isExample && (
-            <div className="mx-auto mt-5 inline-block rounded-md border border-yellow-500/40 bg-yellow-500/5 px-3 py-1.5 text-xs text-yellow-300">
-              <strong>Sem picks publicadas para {requestedDate}.</strong> O card
-              abaixo é um placeholder. Quando uma pick real for publicada,
-              aparece aqui.
-            </div>
+            <Card className="mx-auto mt-5 inline-block border-yellow-500/40 bg-yellow-500/5">
+              <CardContent className="flex flex-col items-center gap-2 px-5 py-4 text-sm text-yellow-300">
+                <strong>Nenhuma pick publicada para {requestedDate}.</strong>
+                <span className="text-xs text-muted-foreground">
+                  Abra o Studio para ver jogos do dia, gerar drafts e a melhor
+                  múltipla dos próximos jogos.
+                </span>
+                <Button asChild size="sm">
+                  <Link href={`/studio/jogos?date=${requestedDate}`}>
+                    Abrir Studio de Jogos
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
           )}
         </div>
       </section>

@@ -84,6 +84,31 @@ const PREFERRED_MARKETS = new Set([
   "key_pass",
 ]);
 
+// Pares de ações DO MESMO jogador que faz sentido combinar — não
+// penaliza correlation. Tudo fora dessa lista (mesmo jogador) é
+// penalizado pesadamente.
+const ALLOWED_SAME_PLAYER_PAIRS = new Set<string>([
+  pairKey("shot", "shot_on"),
+  pairKey("key_pass", "foul_drawn"),
+  pairKey("tackle", "foul_committed"),
+  pairKey("tackle", "interception"),
+]);
+
+function pairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+function marketReliability(actionKey: string): number {
+  return PREFERRED_MARKETS.has(actionKey) ? 1.0 : 0.85;
+}
+
+function lineupConfidence(source: string | null | undefined): number {
+  if (!source) return 0.85;
+  if (source === "api_confirmed" || source === "manual_confirmed") return 1.0;
+  if (source === "api_predicted" || source === "manual_predicted") return 0.95;
+  return 0.85;
+}
+
 function rowToLeg(r: ProbabilityRow): PickLeg {
   return {
     player_name: r.player_name,
@@ -113,14 +138,54 @@ function dedupeByPlayer(legs: PickLeg[]): PickLeg[] {
   return Array.from(byPlayer.values()).sort((a, b) => score(b) - score(a));
 }
 
-function score(l: PickLeg): number {
-  // prob × dq × log(sample+1), bônus mercado preferido
-  const base =
+/**
+ * Score ajustado (E.0A.11):
+ *   probability
+ *   × data_quality_score
+ *   × min(1, sample_size / 5)
+ *   × market_reliability_weight
+ *   × lineup_confidence_weight
+ */
+function score(l: PickLeg, lineupSource: string | null = null): number {
+  return (
     l.probability *
     l.data_quality_score *
-    Math.log10(l.sample_size + 1 + 1);
-  const bonus = PREFERRED_MARKETS.has(l.action_key) ? 0.02 : 0;
-  return base + bonus;
+    Math.min(1, l.sample_size / 5) *
+    marketReliability(l.action_key) *
+    lineupConfidence(lineupSource)
+  );
+}
+
+/**
+ * Seleciona até N legs evitando correlação tóxica:
+ *  - máx 1 jogador com 2 ações (e só se pair estiver em ALLOWED_SAME_PLAYER_PAIRS)
+ *  - demais jogadores: 1 leg cada
+ *  - input já deve estar ordenado por score desc
+ */
+function pickWithCorrelationControl(
+  sorted: PickLeg[],
+  cap: number
+): PickLeg[] {
+  const out: PickLeg[] = [];
+  const usedPlayers = new Map<string, PickLeg>(); // primeira ação de cada player
+  let secondActionGranted = false;
+
+  for (const leg of sorted) {
+    if (out.length >= cap) break;
+    const prev = usedPlayers.get(leg.player_name);
+    if (!prev) {
+      usedPlayers.set(leg.player_name, leg);
+      out.push(leg);
+      continue;
+    }
+    // Mesmo jogador já tem leg — só aceita 1 "doubling" por pick.
+    if (secondActionGranted) continue;
+    if (ALLOWED_SAME_PLAYER_PAIRS.has(pairKey(prev.action_key, leg.action_key))) {
+      out.push(leg);
+      secondActionGranted = true;
+    }
+  }
+  return out;
 }
 
 function combinedProbability(legs: PickLeg[]): number {
@@ -231,13 +296,17 @@ export async function generateSafeMulti(
   apiFixtureId: number
 ): Promise<GeneratedPick | null> {
   const board = await loadBoard(apiFixtureId);
-  const eligible = board.legs_strong.filter(
-    (l) =>
-      l.sample_size >= 4 &&
-      l.data_quality_score >= 0.7 &&
-      l.probability >= 0.75
-  );
-  const candidates = dedupeByPlayer(eligible).slice(0, 3);
+  // E.0A.11: preferir mercados simples, tolerar prob 0.70 mas dq>=0.65
+  const eligible = board.legs_strong
+    .filter(
+      (l) =>
+        l.sample_size >= 4 &&
+        l.data_quality_score >= 0.65 &&
+        l.probability >= 0.7
+    )
+    .sort((a, b) => score(b) - score(a));
+  // Permite até 3 legs com controle de correlação (1 jogador 2 ações OK se permitido)
+  const candidates = pickWithCorrelationControl(eligible, 3);
   if (candidates.length < 2) return null;
   return {
     api_fixture_id: apiFixtureId,
@@ -256,13 +325,16 @@ export async function generateValueMulti(
   apiFixtureId: number
 ): Promise<GeneratedPick | null> {
   const board = await loadBoard(apiFixtureId);
-  const pool = [...board.legs_strong, ...board.legs_monitor].filter(
-    (l) =>
-      l.sample_size >= 4 &&
-      l.data_quality_score >= 0.65 &&
-      l.probability >= 0.65
-  );
-  const candidates = dedupeByPlayer(pool).slice(0, 5);
+  // E.0A.11: tolerar prob 0.60, sample 3, dq 0.55
+  const pool = [...board.legs_strong, ...board.legs_monitor]
+    .filter(
+      (l) =>
+        l.sample_size >= 3 &&
+        l.data_quality_score >= 0.55 &&
+        l.probability >= 0.6
+    )
+    .sort((a, b) => score(b) - score(a));
+  const candidates = pickWithCorrelationControl(pool, 5);
   if (candidates.length < 3) return null;
   return {
     api_fixture_id: apiFixtureId,

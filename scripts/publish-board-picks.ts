@@ -36,6 +36,14 @@ interface CliArgs {
   minDq: number;
   /** Se true, status='published'. Default false → 'draft' (admin promove). */
   publish: boolean;
+  /** Filtra fixtures cujo kickoff_at >= "HH:mm" BR no `date`. */
+  fromTime: string | null;
+  /** Filtra apenas fixtures com kickoff_at > agora (E.0A.11). */
+  futureOnly: boolean;
+  /** Força gravação como draft mesmo se readiness não for READY (E.0A.11). */
+  forceDraft: boolean;
+  /** Inclui watchlist como pick gravada (E.0A.11). */
+  includeWatchlist: boolean;
 }
 
 function parseArgs(): CliArgs {
@@ -53,12 +61,22 @@ function parseArgs(): CliArgs {
   const minSample = Number.parseInt(argMap.get("minSample") ?? "4", 10);
   const minDq = Number.parseFloat(argMap.get("minDq") ?? "0.70");
   const publish = argMap.get("publish") === "true";
+  const fromTimeRaw = argMap.get("fromTime");
+  const fromTime =
+    fromTimeRaw && /^\d{2}:\d{2}$/.test(fromTimeRaw) ? fromTimeRaw : null;
+  const futureOnly = argMap.get("futureOnly") === "true";
+  const forceDraft = argMap.get("forceDraft") === "true";
+  const includeWatchlist = argMap.get("includeWatchlist") === "true";
   return {
     date,
     dryRun,
     minSample: Number.isFinite(minSample) ? minSample : 4,
     minDq: Number.isFinite(minDq) ? minDq : 0.7,
     publish,
+    fromTime,
+    futureOnly,
+    forceDraft,
+    includeWatchlist,
   };
 }
 
@@ -146,11 +164,28 @@ async function main() {
   for (const r of (byKickoff.data ?? []) as FxRow[]) {
     if (!merged.has(r.api_fixture_id)) merged.set(r.api_fixture_id, r);
   }
-  const allFx = Array.from(merged.values()).sort((a, b) => {
+  let allFx = Array.from(merged.values()).sort((a, b) => {
     const ka = a.kickoff_at ?? "";
     const kb = b.kickoff_at ?? "";
     return ka.localeCompare(kb);
   });
+
+  // E.0A.11: filtros adicionais
+  const totalBeforeTimeFilter = allFx.length;
+  if (args.fromTime) {
+    const cutoffBr = new Date(`${args.date}T${args.fromTime}:00-03:00`);
+    allFx = allFx.filter((fx) => {
+      if (!fx.kickoff_at) return false;
+      return new Date(fx.kickoff_at) >= cutoffBr;
+    });
+  }
+  if (args.futureOnly) {
+    const now = new Date();
+    allFx = allFx.filter(
+      (fx) => fx.kickoff_at != null && new Date(fx.kickoff_at) > now
+    );
+  }
+
   console.log(
     `→ ${allFx.length} fixtures encontrados na data ${args.date}` +
       (autoPickLeagueIds.length > 0
@@ -158,11 +193,14 @@ async function main() {
         : " (catálogo vazio — sem filtro de liga)")
   );
   console.log(
-    `   ↳ por date=${args.date}: ${(byDate.data ?? []).length}, por kickoff BR-day: ${(byKickoff.data ?? []).length}`
+    `   ↳ por date=${args.date}: ${(byDate.data ?? []).length}, por kickoff BR-day: ${(byKickoff.data ?? []).length}, filtrados temporalmente: ${totalBeforeTimeFilter - allFx.length}`
   );
 
-  // 2. Avaliar readiness e filtrar READY
-  const readyFx: typeof allFx = [];
+  // 2. Avaliar readiness e filtrar READY (ou WATCHLIST se includeWatchlist)
+  const eligible: Array<{
+    fx: (typeof allFx)[number];
+    gateLevel: "READY" | "WATCHLIST" | "BLOCKED";
+  }> = [];
   for (const fx of allFx) {
     try {
       const gate = await evaluateFixtureReadinessForPick(fx.api_fixture_id);
@@ -175,15 +213,22 @@ async function main() {
       console.log(
         `   ${label.padEnd(15)} ${fx.api_fixture_id}  ${fx.home_team_name} × ${fx.away_team_name}`
       );
-      if (gate.level === "READY") readyFx.push(fx);
+      const shouldInclude =
+        gate.level === "READY" ||
+        (args.includeWatchlist && gate.level === "WATCHLIST") ||
+        (args.forceDraft && gate.level !== "BLOCKED");
+      if (shouldInclude) eligible.push({ fx, gateLevel: gate.level });
     } catch (err) {
       console.warn(
         `   ⚠ gate falhou para ${fx.api_fixture_id}: ${err instanceof Error ? err.message : err}`
       );
     }
   }
+  const readyFx = eligible.map((e) => e.fx);
 
-  console.log(`\n→ ${readyFx.length} fixture(s) READY para publicação`);
+  console.log(
+    `\n→ ${readyFx.length} fixture(s) elegíveis (forceDraft=${args.forceDraft}, includeWatchlist=${args.includeWatchlist})`
+  );
   if (readyFx.length === 0) {
     console.log("   (nada a publicar)");
     process.exit(0);

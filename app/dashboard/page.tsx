@@ -11,7 +11,6 @@ import {
   TrendingDown,
   Activity,
   AlertTriangle,
-  CheckCircle2,
   SparklesIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -62,8 +61,11 @@ export default async function DashboardPage() {
   const stopWin = balance * ((framework?.stop_win_pct ?? 25) / 100);
   const stakeRemaining = dailyLimit - stakedToday;
 
+  // E.0A.11: remove "Dentro do framework. Pode apostar." — só mostra alerta
+  // quando há sinal vermelho/amarelo real (stop-loss, stop-win, ou próximo
+  // do limite). Verde fica oculto para não passar mensagem implícita.
   let frameworkStatus: "green" | "yellow" | "red" = "green";
-  let frameworkMessage = "Dentro do framework. Pode apostar.";
+  let frameworkMessage: string | null = null;
   if (pnlToday <= stopLoss) {
     frameworkStatus = "red";
     frameworkMessage = `Stop-loss atingido (${framework?.stop_loss_pct}%). Apostas bloqueadas por 24h.`;
@@ -106,16 +108,30 @@ export default async function DashboardPage() {
     <div className="min-h-screen">
       <Navbar />
       <main className="container py-8 space-y-6">
-        {/* Alert framework */}
-        <Card className={
-          frameworkStatus === "red" ? "border-destructive" :
-          frameworkStatus === "yellow" ? "border-yellow-500" : "border-green-500"
-        }>
-          <CardContent className="flex items-center gap-3 py-4">
-            {frameworkStatus === "red" && <AlertTriangle className="h-5 w-5 text-destructive" />}
-            {frameworkStatus === "yellow" && <AlertTriangle className="h-5 w-5 text-yellow-500" />}
-            {frameworkStatus === "green" && <CheckCircle2 className="h-5 w-5 text-green-500" />}
-            <p className="text-sm font-medium">{frameworkMessage}</p>
+        {/* Alert framework (E.0A.11: só mostra quando há sinal real) */}
+        {frameworkMessage && (
+          <Card className={
+            frameworkStatus === "red" ? "border-destructive" : "border-yellow-500"
+          }>
+            <CardContent className="flex items-center gap-3 py-4">
+              <AlertTriangle className={`h-5 w-5 ${frameworkStatus === "red" ? "text-destructive" : "text-yellow-500"}`} />
+              <p className="text-sm font-medium">{frameworkMessage}</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* CTA Studio (E.0A.11) */}
+        <Card className="border-primary/40 bg-primary/5">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+            <div>
+              <p className="text-sm font-medium">Central de decisão estatística</p>
+              <p className="text-xs text-muted-foreground">
+                Veja jogos de hoje, picks geradas e a melhor múltipla dos próximos jogos.
+              </p>
+            </div>
+            <Button asChild>
+              <Link href="/studio/jogos">Abrir Studio de Jogos</Link>
+            </Button>
           </CardContent>
         </Card>
 

@@ -11,14 +11,16 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { StudioUpcomingMultiButton } from "@/components/studio/upcoming-multi-button";
 
 export const dynamic = "force-dynamic";
 
 // ============================================================
-// /studio/jogos — dashboard temporal de pipeline (Fase E.0A.9)
+// /studio/jogos — central de decisão por jogo (E.0A.11)
 //
-// Lê de fixture_analysis_schedule (agendado pelo worker temporal)
-// + public_picks (drafts gerados).
+// Lê de fixture_analysis_schedule + recalcula agregados ao vivo
+// (lineup count, probs, picks) para não exibir "BOARD PRONTO" com
+// dq=0.
 // ============================================================
 
 function todayBrIso(): string {
@@ -32,123 +34,311 @@ function nextDate(iso: string): string {
   return d.toISOString().split("T")[0];
 }
 
+type DisplayStatus =
+  | "PICKS_DRAFT"
+  | "READY"
+  | "WATCHLIST"
+  | "BOARD_INCOMPLETO"
+  | "SEM_LINEUP"
+  | "AGENDADO"
+  | "EM_ANDAMENTO"
+  | "BLOQUEADO";
+
 interface ScheduleRow {
   id: string;
   api_fixture_id: number;
+  fixture_id: string | null;
   match_name: string | null;
   league_name: string | null;
   kickoff_at: string | null;
   status: string;
   lineup_source: string | null;
-  players_resolved: number | null;
-  players_total: number | null;
-  sample3_count: number | null;
-  data_quality_score: number | null;
   readiness_level: string | null;
-  last_lineup_check_at: string | null;
-  last_board_generated_at: string | null;
-  last_pick_generated_at: string | null;
+  data_quality_score: number | null;
 }
 
-interface PickRow {
+interface DisplayRow {
+  id: string;
   api_fixture_id: number;
-  risk_level: string;
-  status: string;
-}
-
-interface DisplayRow extends ScheduleRow {
+  match_name: string;
+  league_name: string | null;
+  kickoff_at: string | null;
   minutes_to_kickoff: number | null;
+  lineup_count: number;
+  players_with_history: number;
+  sample3_count: number;
+  dq_avg: number;
+  strong_count: number;
   picks_count: number;
   picks_by_risk: Record<string, number>;
+  schedule_status: string;
+  readiness: string | null;
+  lineup_source: string | null;
+  display_status: DisplayStatus;
 }
 
-const STATUS_STYLES: Record<string, { label: string; cls: string }> = {
-  scheduled: { label: "AGENDADO", cls: "border-border/60 bg-muted text-muted-foreground" },
-  precheck_pending: { label: "PRECHECK", cls: "border-blue-500/40 bg-blue-500/10 text-blue-300" },
-  precheck_done: { label: "PRECHECK OK", cls: "border-blue-500/40 bg-blue-500/10 text-blue-300" },
-  lineup_pending: { label: "ESCALAÇÃO …", cls: "border-yellow-500/40 bg-yellow-500/10 text-yellow-300" },
-  lineup_confirmed: { label: "ESCALAÇÃO OK", cls: "border-green-500/40 bg-green-500/10 text-green-300" },
-  lineup_missing: { label: "SEM ESCALAÇÃO", cls: "border-destructive/40 bg-destructive/10 text-destructive" },
-  history_collecting: { label: "COLETANDO LAST5", cls: "border-blue-500/40 bg-blue-500/10 text-blue-300" },
-  board_ready: { label: "BOARD PRONTO", cls: "border-green-500/40 bg-green-500/10 text-green-300" },
-  picks_draft_ready: { label: "PICKS DRAFT", cls: "border-primary/40 bg-primary/10 text-primary" },
-  blocked: { label: "BLOQUEADO", cls: "border-destructive/40 bg-destructive/10 text-destructive" },
-  failed: { label: "FALHOU", cls: "border-destructive/40 bg-destructive/10 text-destructive" },
+interface FixtureRow {
+  id: string;
+  api_fixture_id: number;
+  league_name: string | null;
+  home_team_name: string | null;
+  away_team_name: string | null;
+  kickoff_at: string | null;
+}
+
+const STATUS_STYLES: Record<DisplayStatus, { label: string; cls: string }> = {
+  PICKS_DRAFT: { label: "PICKS DRAFT", cls: "border-primary/40 bg-primary/10 text-primary" },
+  READY: { label: "READY", cls: "border-green-500/40 bg-green-500/10 text-green-300" },
+  WATCHLIST: { label: "WATCHLIST", cls: "border-yellow-500/40 bg-yellow-500/10 text-yellow-300" },
+  BOARD_INCOMPLETO: { label: "BOARD INCOMPLETO", cls: "border-orange-500/40 bg-orange-500/10 text-orange-300" },
+  SEM_LINEUP: { label: "SEM LINEUP", cls: "border-border/60 bg-muted text-muted-foreground" },
+  AGENDADO: { label: "AGENDADO", cls: "border-border/60 bg-muted text-muted-foreground" },
+  EM_ANDAMENTO: { label: "EM ANDAMENTO", cls: "border-blue-500/40 bg-blue-500/10 text-blue-300" },
+  BLOQUEADO: { label: "BLOQUEADO", cls: "border-destructive/40 bg-destructive/10 text-destructive" },
 };
 
-const READINESS_STYLES: Record<string, string> = {
-  READY: "text-green-400",
-  WATCHLIST: "text-yellow-400",
-  BLOCKED: "text-destructive",
-};
+function decideDisplayStatus(args: {
+  hasPicks: boolean;
+  readiness: string | null;
+  lineup: number;
+  sample3: number;
+  dq: number;
+  strong: number;
+  minutesToKickoff: number | null;
+  scheduleStatus: string;
+}): DisplayStatus {
+  const {
+    hasPicks,
+    readiness,
+    lineup,
+    sample3,
+    dq,
+    strong,
+    minutesToKickoff,
+    scheduleStatus,
+  } = args;
 
-async function loadScheduleRows(date: string): Promise<DisplayRow[]> {
+  if (hasPicks) return "PICKS_DRAFT";
+  if (readiness === "BLOCKED" && lineup > 0) return "BLOQUEADO";
+  if (minutesToKickoff != null && minutesToKickoff < 0) {
+    return "EM_ANDAMENTO";
+  }
+  if (lineup === 0) {
+    if (scheduleStatus === "lineup_missing") return "SEM_LINEUP";
+    return "AGENDADO";
+  }
+  // Tem lineup mas board não foi gerado ou está vazio.
+  if (sample3 === 0 || dq === 0 || strong === 0) return "BOARD_INCOMPLETO";
+  if (readiness === "READY" && dq >= 0.65 && sample3 >= 5) return "READY";
+  if (readiness === "WATCHLIST" || readiness === null) return "WATCHLIST";
+  return "WATCHLIST";
+}
+
+async function loadFixtures(date: string): Promise<DisplayRow[]> {
   const sb = getSupabaseAdmin();
-
   const dayStartBr = `${date}T03:00:00Z`;
   const dayEndBr = `${nextDate(date)}T03:00:00Z`;
 
-  const { data: rows } = await sb
-    .from("fixture_analysis_schedule")
-    .select(
-      "id, api_fixture_id, match_name, league_name, kickoff_at, status, lineup_source, players_resolved, players_total, sample3_count, data_quality_score, readiness_level, last_lineup_check_at, last_board_generated_at, last_pick_generated_at"
-    )
-    .gte("kickoff_at", dayStartBr)
-    .lt("kickoff_at", dayEndBr)
-    .order("kickoff_at", { ascending: true });
-  const scheduleRows = (rows ?? []) as ScheduleRow[];
+  const { data: catalogIds } = await sb
+    .from("football_leagues_catalog")
+    .select("api_league_id")
+    .eq("is_auto_pick", true);
+  const autoPickIds = (catalogIds ?? [])
+    .map((r) => Number(r.api_league_id))
+    .filter((n) => Number.isFinite(n));
 
-  if (scheduleRows.length === 0) return [];
+  function buildQuery() {
+    let q = sb
+      .from("football_fixtures")
+      .select(
+        "id, api_fixture_id, league_name, home_team_name, away_team_name, kickoff_at"
+      )
+      .order("kickoff_at", { ascending: true, nullsFirst: false });
+    if (autoPickIds.length > 0) q = q.in("api_league_id", autoPickIds);
+    return q;
+  }
+  const [byDate, byKick] = await Promise.all([
+    buildQuery().eq("date", date),
+    buildQuery().gte("kickoff_at", dayStartBr).lt("kickoff_at", dayEndBr),
+  ]);
+  const merged = new Map<number, FixtureRow>();
+  for (const r of (byDate.data ?? []) as FixtureRow[])
+    merged.set(r.api_fixture_id, r);
+  for (const r of (byKick.data ?? []) as FixtureRow[])
+    if (!merged.has(r.api_fixture_id)) merged.set(r.api_fixture_id, r);
+  const fixtures = Array.from(merged.values()).sort((a, b) =>
+    (a.kickoff_at ?? "").localeCompare(b.kickoff_at ?? "")
+  );
 
-  const apiFixtureIds = scheduleRows.map((r) => r.api_fixture_id);
-  const { data: picks } = await sb
-    .from("public_picks")
-    .select("api_fixture_id, risk_level, status")
-    .in("api_fixture_id", apiFixtureIds)
-    .eq("pick_date", date)
-    .in("status", ["draft", "published"]);
+  if (fixtures.length === 0) return [];
+
+  const fixtureIds = fixtures.map((f) => f.id);
+  const apiFixtureIds = fixtures.map((f) => f.api_fixture_id);
+
+  const [
+    { data: scheduleRows },
+    { data: lineupRows },
+    { data: probsRows },
+    { data: picks },
+  ] = await Promise.all([
+    sb
+      .from("fixture_analysis_schedule")
+      .select(
+        "id, api_fixture_id, fixture_id, match_name, league_name, kickoff_at, status, lineup_source, readiness_level, data_quality_score"
+      )
+      .in("api_fixture_id", apiFixtureIds),
+    sb
+      .from("football_lineup_players")
+      .select("fixture_id, api_player_id")
+      .in("fixture_id", fixtureIds),
+    sb
+      .from("football_player_action_probabilities")
+      .select(
+        "api_fixture_id, recommendation, sample_size, data_quality_score"
+      )
+      .in("api_fixture_id", apiFixtureIds),
+    sb
+      .from("public_picks")
+      .select("api_fixture_id, risk_level, status")
+      .in("api_fixture_id", apiFixtureIds)
+      .eq("pick_date", date)
+      .in("status", ["draft", "published"]),
+  ]);
+
+  const scheduleByFx = new Map<number, ScheduleRow>();
+  for (const r of (scheduleRows ?? []) as ScheduleRow[])
+    scheduleByFx.set(r.api_fixture_id, r);
+
+  // Lineup count + players com api_player_id real (não sintético)
+  const lineupCountByFx = new Map<string, number>();
+  const realPlayersByFx = new Map<string, number>();
+  const SYNTHETIC_MIN = 800_000_000;
+  for (const r of (lineupRows ?? []) as Array<{
+    fixture_id: string;
+    api_player_id: number | null;
+  }>) {
+    lineupCountByFx.set(
+      r.fixture_id,
+      (lineupCountByFx.get(r.fixture_id) ?? 0) + 1
+    );
+    if (
+      r.api_player_id != null &&
+      r.api_player_id > 0 &&
+      r.api_player_id < SYNTHETIC_MIN
+    ) {
+      realPlayersByFx.set(
+        r.fixture_id,
+        (realPlayersByFx.get(r.fixture_id) ?? 0) + 1
+      );
+    }
+  }
+
+  // Probs aggregate
+  interface ProbAgg {
+    strong: number;
+    sample3: number;
+    dqSum: number;
+    dqCount: number;
+  }
+  const probsByFx = new Map<number, ProbAgg>();
+  for (const r of (probsRows ?? []) as Array<{
+    api_fixture_id: number;
+    recommendation: string | null;
+    sample_size: number | null;
+    data_quality_score: number | null;
+  }>) {
+    const cur = probsByFx.get(r.api_fixture_id) ?? {
+      strong: 0,
+      sample3: 0,
+      dqSum: 0,
+      dqCount: 0,
+    };
+    if (r.recommendation === "forte") cur.strong++;
+    if ((r.sample_size ?? 0) >= 3) cur.sample3++;
+    const dq = Number(r.data_quality_score);
+    if (Number.isFinite(dq) && dq > 0) {
+      cur.dqSum += dq;
+      cur.dqCount++;
+    }
+    probsByFx.set(r.api_fixture_id, cur);
+  }
+
   const picksByFx = new Map<
     number,
     { count: number; byRisk: Record<string, number> }
   >();
-  for (const p of (picks ?? []) as PickRow[]) {
-    const cur = picksByFx.get(p.api_fixture_id) ?? {
-      count: 0,
-      byRisk: {},
-    };
+  for (const p of (picks ?? []) as Array<{
+    api_fixture_id: number;
+    risk_level: string;
+    status: string;
+  }>) {
+    const cur = picksByFx.get(p.api_fixture_id) ?? { count: 0, byRisk: {} };
     cur.count++;
     cur.byRisk[p.risk_level] = (cur.byRisk[p.risk_level] ?? 0) + 1;
     picksByFx.set(p.api_fixture_id, cur);
   }
 
   const now = Date.now();
-  return scheduleRows.map((r) => {
-    const minutes = r.kickoff_at
-      ? Math.round((new Date(r.kickoff_at).getTime() - now) / 60_000)
-      : null;
-    const picks = picksByFx.get(r.api_fixture_id) ?? {
+  return fixtures.map((fx) => {
+    const schedule = scheduleByFx.get(fx.api_fixture_id);
+    const lineup = lineupCountByFx.get(fx.id) ?? 0;
+    const realPlayers = realPlayersByFx.get(fx.id) ?? 0;
+    const agg = probsByFx.get(fx.api_fixture_id) ?? {
+      strong: 0,
+      sample3: 0,
+      dqSum: 0,
+      dqCount: 0,
+    };
+    const dq = agg.dqCount > 0 ? agg.dqSum / agg.dqCount : 0;
+    const picksAgg = picksByFx.get(fx.api_fixture_id) ?? {
       count: 0,
       byRisk: {},
     };
-    return {
-      ...r,
+    const minutes = fx.kickoff_at
+      ? Math.round((new Date(fx.kickoff_at).getTime() - now) / 60_000)
+      : null;
+
+    const display: DisplayRow = {
+      id: fx.id,
+      api_fixture_id: fx.api_fixture_id,
+      match_name: `${fx.home_team_name ?? "?"} × ${fx.away_team_name ?? "?"}`,
+      league_name: fx.league_name,
+      kickoff_at: fx.kickoff_at,
       minutes_to_kickoff: minutes,
-      picks_count: picks.count,
-      picks_by_risk: picks.byRisk,
+      lineup_count: lineup,
+      players_with_history: realPlayers,
+      sample3_count: agg.sample3,
+      dq_avg: Number(dq.toFixed(3)),
+      strong_count: agg.strong,
+      picks_count: picksAgg.count,
+      picks_by_risk: picksAgg.byRisk,
+      schedule_status: schedule?.status ?? "scheduled",
+      readiness: schedule?.readiness_level ?? null,
+      lineup_source: schedule?.lineup_source ?? null,
+      display_status: "AGENDADO",
     };
+
+    display.display_status = decideDisplayStatus({
+      hasPicks: display.picks_count > 0,
+      readiness: display.readiness,
+      lineup: display.lineup_count,
+      sample3: display.sample3_count,
+      dq: display.dq_avg,
+      strong: display.strong_count,
+      minutesToKickoff: display.minutes_to_kickoff,
+      scheduleStatus: display.schedule_status,
+    });
+
+    return display;
   });
 }
 
 function formatKickoffRelative(minutes: number | null): string {
   if (minutes == null) return "?";
-  if (minutes > 120) {
-    const h = Math.round(minutes / 60);
-    return `em ${h}h`;
-  }
+  if (minutes > 120) return `em ${Math.round(minutes / 60)}h`;
   if (minutes > 0) return `em ${minutes}min`;
   if (minutes > -120) return `há ${Math.abs(minutes)}min`;
-  const h = Math.round(Math.abs(minutes) / 60);
-  return `há ${h}h`;
+  return `há ${Math.round(Math.abs(minutes) / 60)}h`;
 }
 
 export default async function StudioJogosPage({
@@ -168,19 +358,13 @@ export default async function StudioJogosPage({
       ? params.date
       : todayBrIso();
 
-  const rows = await loadScheduleRows(date);
+  const rows = await loadFixtures(date);
 
   const agg = rows.reduce<Record<string, number>>((a, r) => {
-    a[r.status] = (a[r.status] ?? 0) + 1;
+    a[r.display_status] = (a[r.display_status] ?? 0) + 1;
     return a;
   }, {});
   const totalPicks = rows.reduce((a, r) => a + r.picks_count, 0);
-  const readyCount = rows.filter(
-    (r) => r.readiness_level === "READY"
-  ).length;
-  const watchlistCount = rows.filter(
-    (r) => r.readiness_level === "WATCHLIST"
-  ).length;
 
   const prev = (() => {
     const d = new Date(`${date}T00:00:00Z`);
@@ -197,14 +381,13 @@ export default async function StudioJogosPage({
           <div>
             <h1 className="text-2xl font-bold">Jogos do dia — Studio</h1>
             <p className="text-sm text-muted-foreground">
-              Estado do pipeline temporal (E.0A.9). Atualizado pelo worker a
-              cada execução.
+              Central de decisão estatística. Status recalculado ao vivo.
             </p>
           </div>
           <form className="flex items-end gap-2">
             <div>
               <label className="text-xs uppercase tracking-wide text-muted-foreground">
-                Data (YYYY-MM-DD)
+                Data
               </label>
               <input
                 type="text"
@@ -219,27 +402,53 @@ export default async function StudioJogosPage({
           </form>
         </div>
 
+        <StudioUpcomingMultiButton date={date} />
+
         <div className="flex flex-wrap gap-3 text-xs">
           <Pill label="Total" value={rows.length} />
-          <Pill label="READY" value={readyCount} cls="text-green-400" />
+          <Pill
+            label="PICKS DRAFT"
+            value={agg.PICKS_DRAFT ?? 0}
+            cls="text-primary"
+          />
+          <Pill label="READY" value={agg.READY ?? 0} cls="text-green-400" />
           <Pill
             label="WATCHLIST"
-            value={watchlistCount}
+            value={agg.WATCHLIST ?? 0}
             cls="text-yellow-400"
           />
           <Pill
-            label="PICKS DRAFT"
-            value={totalPicks}
-            cls="text-primary"
+            label="INCOMPLETO"
+            value={agg.BOARD_INCOMPLETO ?? 0}
+            cls="text-orange-400"
           />
-          {Object.entries(agg).map(([k, v]) => (
+          <Pill
+            label="SEM LINEUP"
+            value={agg.SEM_LINEUP ?? 0}
+            cls="text-muted-foreground"
+          />
+          <Pill
+            label="AGENDADO"
+            value={agg.AGENDADO ?? 0}
+            cls="text-muted-foreground"
+          />
+          <Pill
+            label="ANDAMENTO"
+            value={agg.EM_ANDAMENTO ?? 0}
+            cls="text-blue-400"
+          />
+          <Pill
+            label="BLOQUEADO"
+            value={agg.BLOQUEADO ?? 0}
+            cls="text-destructive"
+          />
+          {totalPicks > 0 && (
             <Pill
-              key={k}
-              label={STATUS_STYLES[k]?.label ?? k}
-              value={v}
-              cls="text-muted-foreground"
+              label="picks total"
+              value={totalPicks}
+              cls="text-primary"
             />
-          ))}
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2 text-xs">
@@ -257,16 +466,11 @@ export default async function StudioJogosPage({
         {rows.length === 0 ? (
           <Card>
             <CardHeader>
-              <CardTitle>Nenhum fixture agendado para essa data</CardTitle>
+              <CardTitle>Nenhum fixture nessa data</CardTitle>
               <CardDescription>
-                Rode o schedule + worker:
-                <div className="mt-2 space-y-1 font-mono text-xs">
-                  <div className="text-muted-foreground">
-                    npm run schedule:fixtures -- --date={date} --dryRun=false
-                  </div>
-                  <div className="text-muted-foreground">
-                    npm run worker:fixture-analysis -- --dryRun=false
-                  </div>
+                Rode o pipeline:
+                <div className="mt-2 font-mono text-xs text-muted-foreground">
+                  npm run daily:auto-full -- --date={date} --dryRun=false
                 </div>
               </CardDescription>
             </CardHeader>
@@ -276,26 +480,19 @@ export default async function StudioJogosPage({
             <CardHeader>
               <CardTitle>Jogos ({rows.length})</CardTitle>
               <CardDescription>
-                Dados do worker temporal. Refresh manual ao recarregar a página.
+                Status recomputado de lineup + probs + picks. Clique no jogo
+                para ver detalhes.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
               {rows.map((r) => {
-                const sty =
-                  STATUS_STYLES[r.status] ?? STATUS_STYLES.scheduled;
-                const readiness = r.readiness_level ?? "—";
-                const readinessCls =
-                  READINESS_STYLES[readiness] ?? "text-muted-foreground";
-                const dq = Number(r.data_quality_score ?? 0).toFixed(2);
-                const playersStr =
-                  r.players_resolved != null && r.players_total != null
-                    ? `${r.players_resolved}/${r.players_total}`
-                    : "—";
+                const sty = STATUS_STYLES[r.display_status];
                 const kickoff = r.kickoff_at?.slice(11, 16) ?? "?";
                 return (
-                  <div
+                  <Link
+                    href={`/studio/jogos/${r.api_fixture_id}`}
                     key={r.id}
-                    className="flex flex-col gap-2 rounded-md border border-border/40 bg-muted/30 p-3 text-sm sm:flex-row sm:items-start sm:justify-between"
+                    className="flex flex-col gap-2 rounded-md border border-border/40 bg-muted/30 p-3 text-sm transition-colors hover:bg-muted/60 sm:flex-row sm:items-start sm:justify-between"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
@@ -314,25 +511,22 @@ export default async function StudioJogosPage({
                           {r.league_name ?? "?"}
                         </span>
                       </div>
-                      <div className="mt-1 font-medium">{r.match_name ?? "?"}</div>
+                      <div className="mt-1 font-medium">{r.match_name}</div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
-                        lineup {playersStr}{" "}
-                        {r.lineup_source ? `(${r.lineup_source})` : ""} ·
-                        sample3+ {r.sample3_count ?? 0} · dq {dq} ·{" "}
-                        <span className={readinessCls}>
-                          readiness {readiness}
-                        </span>
+                        lineup {r.lineup_count}p ({r.players_with_history}{" "}
+                        com histórico) · sample3+ {r.sample3_count} · dq{" "}
+                        {r.dq_avg.toFixed(2)} · ações fortes{" "}
+                        {r.strong_count}
+                        {r.lineup_source ? ` · ${r.lineup_source}` : ""}
                       </div>
                       {r.picks_count > 0 && (
                         <div className="mt-0.5 text-xs">
                           <span className="text-primary">
-                            {r.picks_count} pick(s) draft
+                            {r.picks_count} pick(s) draft:
                           </span>{" "}
-                          <span className="text-muted-foreground">
-                            ({Object.entries(r.picks_by_risk)
-                              .map(([k, v]) => `${k}:${v}`)
-                              .join(", ")})
-                          </span>
+                          {Object.entries(r.picks_by_risk)
+                            .map(([k, v]) => `${k}:${v}`)
+                            .join(", ")}
                         </div>
                       )}
                     </div>
@@ -340,45 +534,16 @@ export default async function StudioJogosPage({
                       <span className="rounded-md border border-border/60 bg-background/40 px-2 py-0.5 text-[10px] uppercase text-muted-foreground">
                         api={r.api_fixture_id}
                       </span>
-                      {r.picks_count > 0 && (
-                        <Button asChild size="sm" variant="outline">
-                          <Link href={`/picks?date=${date}`}>Ver picks</Link>
-                        </Button>
-                      )}
+                      <span className="text-[10px] text-muted-foreground">
+                        ver detalhe →
+                      </span>
                     </div>
-                  </div>
+                  </Link>
                 );
               })}
             </CardContent>
           </Card>
         )}
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Comandos operacionais</CardTitle>
-            <CardDescription>
-              Esta tela é leitura. Pipeline é executado via CLI ou cron.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-1.5 text-xs font-mono">
-            <div># 1) agendar fixtures do dia (zero quota)</div>
-            <div className="text-muted-foreground">
-              npm run schedule:fixtures -- --date={date} --dryRun=false
-            </div>
-            <div className="mt-2"># 2) rodar worker (T-2h..T-15m → ação)</div>
-            <div className="text-muted-foreground">
-              npm run worker:fixture-analysis -- --dryRun=false
-            </div>
-            <div className="mt-2"># 3) cron HTTP (Vercel)</div>
-            <div className="text-muted-foreground">
-              POST /api/cron/fixture-analysis (header x-cron-secret)
-            </div>
-            <div className="mt-2"># 4) atalho: pipeline tudo-de-uma-vez</div>
-            <div className="text-muted-foreground">
-              npm run daily:auto-full -- --date={date} --dryRun=false --maxFixtures=20
-            </div>
-          </CardContent>
-        </Card>
       </main>
     </div>
   );
