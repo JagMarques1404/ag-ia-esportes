@@ -26,7 +26,8 @@ interface CliArgs {
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const QUOTA_FLOOR = 10;
+// QUOTA_FLOOR vem de env (API_FOOTBALL_QUOTA_FLOOR, default Pro = 500).
+let QUOTA_FLOOR = 500;
 
 function todayString(): string {
   return new Date().toISOString().split("T")[0];
@@ -88,6 +89,11 @@ async function main() {
 
   const { syncFixturesByDate } = await import("../lib/api-football/sync");
   const { getQuotaSummary } = await import("../lib/api-football/quota");
+  const { getApiQuotaFloor, getApiPlanName } = await import(
+    "../lib/api-football/config"
+  );
+  QUOTA_FLOOR = getApiQuotaFloor();
+  console.log(`→ plano=${getApiPlanName()} quota_floor=${QUOTA_FLOOR}`);
 
   const before = await getQuotaSummary();
   console.log(

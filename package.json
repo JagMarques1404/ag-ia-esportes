@@ -26,7 +26,11 @@
     "seed:football-catalog": "tsx scripts/seed-football-catalog.ts",
     "seed:manual-lineups": "tsx scripts/seed-manual-lineups.ts",
     "report:manual-lineup-readiness": "tsx scripts/report-manual-lineup-readiness.ts",
-    "import:manual-player-history": "tsx scripts/import-manual-player-history.ts"
+    "import:manual-player-history": "tsx scripts/import-manual-player-history.ts",
+    "publish:board-picks": "tsx scripts/publish-board-picks.ts",
+    "daily:auto-full": "tsx scripts/daily-auto-full-pipeline.ts",
+    "schedule:fixtures": "tsx scripts/schedule-fixture-analysis.ts",
+    "worker:fixture-analysis": "tsx scripts/run-fixture-analysis-worker.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

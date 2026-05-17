@@ -38,7 +38,8 @@ interface CliArgs {
   dryRun: boolean;
 }
 
-const QUOTA_FLOOR = 30;
+// QUOTA_FLOOR vem de env (API_FOOTBALL_QUOTA_FLOOR, default Pro = 500).
+// Lazy-init pra .env.local ser carregado antes (loadEnv acima desta linha).
 
 function parseArgs(): CliArgs {
   const argMap = new Map<string, string>();
@@ -76,8 +77,13 @@ async function main() {
     "../lib/football-data/priority-leagues"
   );
   const { getQuotaSummary } = await import("../lib/api-football/quota");
+  const { getApiQuotaFloor, getApiPlanName } = await import(
+    "../lib/api-football/config"
+  );
   const sb = getSupabaseAdmin();
   const provider = getActiveProvider();
+  const QUOTA_FLOOR = getApiQuotaFloor();
+  console.log(`→ plano=${getApiPlanName()} quota_floor=${QUOTA_FLOOR}`);
 
   const warnings: string[] = [];
   let runId: string | null = null;

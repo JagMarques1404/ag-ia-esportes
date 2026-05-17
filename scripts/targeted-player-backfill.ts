@@ -33,7 +33,8 @@ interface CliArgs {
   dryRun: boolean;
 }
 
-const QUOTA_FLOOR = 30;
+// QUOTA_FLOOR vem de env (API_FOOTBALL_QUOTA_FLOOR, default Pro = 500).
+let QUOTA_FLOOR = 500;
 const FT_STATUSES = ["FT", "AET", "PEN"];
 
 function parseArgs(): CliArgs {
@@ -92,6 +93,11 @@ async function main() {
   const { syncFixturePlayerStats } = await import(
     "../lib/api-football/sync"
   );
+  const { getApiQuotaFloor, getApiPlanName } = await import(
+    "../lib/api-football/config"
+  );
+  QUOTA_FLOOR = getApiQuotaFloor();
+  console.log(`→ plano=${getApiPlanName()} quota_floor=${QUOTA_FLOOR}`);
   const sb = getSupabaseAdmin();
 
   // 1. Fixture alvo
